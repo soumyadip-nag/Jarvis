@@ -13,17 +13,15 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
 
 DATA_DIR = ROOT_DIR / "Data"
-FRONTEND_FILES_DIR = ROOT_DIR / "Frontend" / "Files"
-GRAPHICS_DIR = ROOT_DIR / "Frontend" / "Graphics"
 CHATLOG_PATH = DATA_DIR / "ChatLog.json"
 SPEECH_PATH = DATA_DIR / "speech.mp3"
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-FRONTEND_FILES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Names
 USERNAME = os.getenv("Username", "Sir")
 ASSISTANT_NAME = os.getenv("Assistantname", "Jarvis")
+HONORIFIC = os.getenv("Honorific", "sir")  # how Jarvis addresses you, e.g. "sir" or "ma'am"
 
 # API keys (only from the environment / .env)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -36,8 +34,13 @@ GROQ_CONTENT_MODEL = os.getenv("GROQ_CONTENT_MODEL", GROQ_CHAT_MODEL)
 COHERE_MODEL = os.getenv("COHERE_MODEL", "command-a-03-2025")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell")
 
-# Voice
-ASSISTANT_VOICE = os.getenv("AssistantVoice", "en-CA-LiamNeural")
+# Voice: a calm British male voice, slightly slower and deeper than default.
+ASSISTANT_VOICE = os.getenv("AssistantVoice", "en-GB-RyanNeural")
+VOICE_RATE = os.getenv("VOICE_RATE", "-4%")
+VOICE_PITCH = os.getenv("VOICE_PITCH", "-2Hz")
+# Subtle studio/"AI" processing (needs the optional `pedalboard` package).
+VOICE_FX = os.getenv("VOICE_FX", "true").lower() in ("1", "true", "yes", "on")
+SPEECH_FX_PATH = DATA_DIR / "speech_fx.wav"
 
 # How many past chat messages are sent to the LLM (keeps requests inside the context window).
 MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "20"))

@@ -1,20 +1,20 @@
 from googlesearch import search
 from groq import Groq
 
-from Backend.config import USERNAME, ASSISTANT_NAME, GROQ_API_KEY, GROQ_CHAT_MODEL, require_key
+from Backend.Personality import SYSTEM_PROMPT
+from Backend.config import HONORIFIC, GROQ_API_KEY, GROQ_CHAT_MODEL, require_key
 from Backend.ChatLog import load_chatlog, save_chatlog, recent, clean_answer
 from Backend.Chatbot import RealtimeInformation
 
 client = Groq(api_key=require_key(GROQ_API_KEY, "GROQ_API_KEY"))
 
-System = f"""Hello, I am {USERNAME}. You are a very accurate and advanced AI assistant named {ASSISTANT_NAME} which has real-time up-to-date information from the internet.
-*** Provide answers in a professional way, make sure to add full stops, commas, question marks, and use proper grammar.***
-*** Just answer the question from the provided data in a professional way. ***"""
+SEARCH_INSTRUCTIONS = """You have just been given live web search results between [start] and [end].
+Answer the user's question from those results, in your usual concise, spoken style.
+If the results don't contain the answer, say so briefly rather than guessing."""
 
 SystemChatBot = [
-    {"role": "system", "content": System},
-    {"role": "user", "content": "Hi"},
-    {"role": "assistant", "content": "Hello, how can I help you?"},
+    {"role": "system", "content": SYSTEM_PROMPT},
+    {"role": "system", "content": SEARCH_INSTRUCTIONS},
 ]
 
 
@@ -56,7 +56,7 @@ def RealtimeSearchEngine(prompt):
                 Answer += chunk.choices[0].delta.content
     except Exception as e:
         print(f"RealtimeSearchEngine error: {e}")
-        return "Sorry, I couldn't fetch live information right now."
+        return f"I'm afraid I couldn't fetch live information just now, {HONORIFIC}."
 
     Answer = clean_answer(Answer)
     messages.append({"role": "assistant", "content": Answer})

@@ -10,6 +10,8 @@ pygame
 SpeechRecognition
 PyAudio
 PyQt5
+psutil
+pedalboard
 # Windows desktop automation
 AppOpener
 pywhatkit

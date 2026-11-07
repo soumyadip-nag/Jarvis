@@ -1,24 +1,20 @@
 from groq import Groq
 import datetime
 
-from Backend.config import USERNAME, ASSISTANT_NAME, GROQ_API_KEY, GROQ_CHAT_MODEL, require_key
+from Backend.Personality import SYSTEM_PROMPT
+from Backend.config import GROQ_API_KEY, HONORIFIC, GROQ_CHAT_MODEL, require_key
 from Backend.ChatLog import load_chatlog, save_chatlog, recent, clean_answer
 
 client = Groq(api_key=require_key(GROQ_API_KEY, "GROQ_API_KEY"))
 
-System = f"""Hello, I am {USERNAME}. You are a very accurate and advanced AI assistant named {ASSISTANT_NAME} which also has real-time up-to-date information from the internet.
-*** Do not tell time until I ask, do not talk too much, just answer the question.***
-*** Reply in only English, even if the question is in Hindi, reply in English.***
-*** Do not provide notes in the output, just answer the question and never mention your training data. ***
-"""
 
-SystemChatBot = [{"role": "system", "content": System}]
+SystemChatBot = [{"role": "system", "content": SYSTEM_PROMPT}]
 
 
 def RealtimeInformation():
     now = datetime.datetime.now()
     return (
-        "Please use this real-time information if needed,\n"
+        "Current date and time (use only if relevant):\n"
         f"Day: {now:%A}\nDate: {now:%d}\nMonth: {now:%B}\nYear: {now:%Y}\n"
         f"Time: {now:%H} hours:{now:%M} minutes: {now:%S} seconds.\n"
     )
@@ -45,7 +41,7 @@ def ChatBot(Query):
     except Exception as e:
         # Keep the history intact and tell the user instead of retrying forever.
         print(f"ChatBot error: {e}")
-        return "Sorry, I couldn't reach my language model right now. Please check the internet connection and API key."
+        return f"I'm having trouble reaching my servers, {HONORIFIC}. Please check the internet connection and the API key."
 
     Answer = clean_answer(Answer)
     messages.append({"role": "assistant", "content": Answer})

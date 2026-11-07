@@ -10,7 +10,6 @@ venv/
 # Runtime data
 Data/*
 !Data/.gitkeep
-Frontend/Files/*.data
 
 # Editors / OS
 .vscode/
