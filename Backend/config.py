@@ -42,6 +42,10 @@ VOICE_PITCH = os.getenv("VOICE_PITCH", "-2Hz")
 VOICE_FX = os.getenv("VOICE_FX", "true").lower() in ("1", "true", "yes", "on")
 SPEECH_FX_PATH = DATA_DIR / "speech_fx.wav"
 
+# Cloud brain shared with the phone app (optional). See cloud/README.md.
+JARVIS_SERVER_URL = os.getenv("JARVIS_SERVER_URL", "").strip()
+JARVIS_PASSCODE = os.getenv("JARVIS_PASSCODE", "").strip()
+
 # How many past chat messages are sent to the LLM (keeps requests inside the context window).
 MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "20"))
 

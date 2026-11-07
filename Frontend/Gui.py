@@ -15,6 +15,8 @@ import datetime
 import math
 import random
 import sys
+import threading
+import time
 
 from PyQt5.QtCore import Qt, QTimer, QThread, QObject, QPointF, QRectF, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import (
@@ -485,8 +487,13 @@ class AssistantWorker(QObject):
         self.state.emit("booting")
         self.status.emit("Loading modules")
         try:
-            from Backend.Assistant import handle_query
+            from Backend.CloudSync import enabled as cloud_enabled
             from Backend.Personality import greeting
+            if cloud_enabled():
+                from Backend.CloudAssistant import handle_query
+                self.status.emit("Connecting to the cloud")
+            else:
+                from Backend.Assistant import handle_query
             self.handle_query = handle_query
         except Exception as e:
             self.state.emit("offline")
@@ -544,6 +551,63 @@ class AssistantWorker(QObject):
                 print(f"TTS error: {e}")
         self.state.emit("idle")
         self.status.emit("Awaiting your command")
+
+
+class SyncWorker(QObject):
+    """Background loop (cloud mode only): shows phone conversations and runs commands sent to the laptop."""
+    message = pyqtSignal(str, str)      # role, text
+    status = pyqtSignal(str)
+    devices = pyqtSignal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.running = True
+        self.last_activity = time.time()
+
+    def start(self):
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        from Backend.CloudSync import CloudClient, CloudError
+        from Backend.CloudAssistant import run_laptop_command
+        client = CloudClient()
+        first = True
+        while self.running:
+            try:
+                data = client.sync()
+                messages = data.get("messages", [])
+                if first:
+                    # show the tail of the shared conversation for continuity
+                    for m in messages[-8:]:
+                        self.message.emit("user" if m["role"] == "user" else "jarvis", self._label(m))
+                    first = False
+                else:
+                    for m in messages:
+                        if m.get("device") != "laptop":
+                            self.message.emit("user" if m["role"] == "user" else "jarvis", self._label(m))
+                            self.last_activity = time.time()
+                for cmd in data.get("commands", []):
+                    if cmd.get("type") == "laptop_command":
+                        self.status.emit(f"From phone: {cmd['command']}")
+                        self.message.emit("jarvis", f"Running \"{cmd['command']}\", as requested from your phone.")
+                        try:
+                            run_laptop_command(cmd["command"])
+                        except Exception as e:
+                            print(f"Command failed: {e}")
+                    client.done(cmd["id"])
+                    self.last_activity = time.time()
+                self.devices.emit(data.get("devices", {}))
+            except CloudError as e:
+                print(f"Sync: {e}")
+            except Exception as e:
+                print(f"Sync error: {e}")
+            active = time.time() - self.last_activity < 120
+            time.sleep(4 if active else 12)
+
+    @staticmethod
+    def _label(m):
+        prefix = "📱 " if m.get("device") == "phone" and m["role"] == "user" else ""
+        return prefix + m["content"]
 
 
 # ───────────────────────────── window chrome ─────────────────────────────
@@ -793,8 +857,19 @@ class MainWindow(QMainWindow):
         self.request_text.connect(self.worker.process)
         self.request_listen.connect(self.worker.listen)
         self.thread_.started.connect(self.worker.boot)
+        self.sync = None
         if start_backend:
             self.thread_.start()
+            from Backend.CloudSync import enabled as cloud_enabled
+            if cloud_enabled():
+                self.sync = SyncWorker()
+                self.sync.message.connect(self.chat.add)
+                self.sync.status.connect(self.status_label.setText)
+                self.sync.devices.connect(self.on_devices)
+                self.request_text.connect(lambda _t: setattr(self.sync, "last_activity", time.time()))
+                self.sync.start()
+        self.footer_base = footer.text()
+        self.footer = footer
 
     @staticmethod
     def _section(text):
@@ -847,7 +922,14 @@ class MainWindow(QMainWindow):
         if state == "idle":
             self.input.setFocus()
 
+    def on_devices(self, devices):
+        phone = devices.get("phone", {})
+        dot = "● PHONE ONLINE" if phone.get("online") else "○ PHONE OFFLINE"
+        self.footer.setText(f"{dot}    •    {self.footer_base}")
+
     def closeEvent(self, event):
+        if self.sync:
+            self.sync.running = False
         self.worker.stop_speaking()
         self.thread_.quit()
         if not self.thread_.wait(1500):

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#050b14">
+  <meta name="robots" content="noindex, nofollow">
+  <title>J.A.R.V.I.S</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="grid-bg"></div>
+
+  <!-- Login -->
+  <section id="login" class="screen" hidden>
+    <canvas id="login-reactor" class="reactor login-reactor"></canvas>
+    <h1 class="title">J.A.R.V.I.S</h1>
+    <p class="subtitle">JUST A RATHER VERY INTELLIGENT SYSTEM</p>
+    <form id="login-form" class="login-form" autocomplete="on">
+      <input id="passcode" type="password" placeholder="Passcode" autocomplete="current-password" required>
+      <button type="submit" class="primary">Unlock</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </section>
+
+  <!-- App -->
+  <section id="app" class="screen" hidden>
+    <header class="topbar">
+      <div>
+        <div class="title small">J.A.R.V.I.S</div>
+        <div class="devices" id="devices"></div>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-view="chat" aria-label="Chat">💬</button>
+        <button class="tab" data-view="memory" aria-label="Memory">🧠</button>
+        <button class="tab" data-view="settings" aria-label="Settings">⚙️</button>
+      </nav>
+    </header>
+
+    <main class="layout">
+      <aside class="hud">
+        <canvas id="reactor" class="reactor" title="Tap to talk"></canvas>
+        <div id="state-label" class="state-label">STANDING BY</div>
+        <div id="status-label" class="status-label">Awaiting your command</div>
+        <div class="chips" id="chips"></div>
+      </aside>
+
+      <!-- Chat view -->
+      <section class="view" id="view-chat">
+        <div id="chat" class="chat" aria-live="polite"></div>
+        <form id="composer" class="composer">
+          <input id="input" type="text" placeholder="Ask Jarvis anything…" autocomplete="off" enterkeyhint="send">
+          <button type="button" id="mic" class="round" aria-label="Speak">🎙</button>
+          <button type="submit" id="send" class="round" aria-label="Send">➤</button>
+        </form>
+      </section>
+
+      <!-- Memory view -->
+      <section class="view" id="view-memory" hidden>
+        <div class="panel-head">
+          <h2>MEMORY</h2>
+          <span id="memory-count" class="muted"></span>
+        </div>
+        <p class="muted small-text">Everything Jarvis has learned about you, shared by all your devices. It learns automatically from conversations; you can also add or delete entries.</p>
+        <form id="memory-form" class="row">
+          <input id="memory-input" placeholder="Teach Jarvis something…">
+          <button class="primary" type="submit">Add</button>
+        </form>
+        <input id="memory-search" class="search" placeholder="Search memories">
+        <ul id="memory-list" class="memory-list"></ul>
+      </section>
+
+      <!-- Settings view -->
+      <section class="view" id="view-settings" hidden>
+        <div class="panel-head"><h2>SETTINGS</h2></div>
+        <div class="setting">
+          <label for="voice-select">Voice</label>
+          <select id="voice-select"></select>
+        </div>
+        <div class="setting">
+          <label for="rate">Speed <span id="rate-val"></span></label>
+          <input id="rate" type="range" min="0.7" max="1.3" step="0.05">
+        </div>
+        <div class="setting">
+          <label for="pitch">Pitch <span id="pitch-val"></span></label>
+          <input id="pitch" type="range" min="0.5" max="1.5" step="0.05">
+        </div>
+        <button id="test-voice" class="ghost">▶ Test voice</button>
+        <div class="setting toggle"><label><input type="checkbox" id="auto-speak"> Speak replies aloud</label></div>
+        <div class="setting toggle"><label><input type="checkbox" id="auto-open"> Open apps automatically</label></div>
+        <div class="setting">
+          <label for="speech-lang">Speech recognition language</label>
+          <select id="speech-lang">
+            <option value="en-IN">English (India)</option>
+            <option value="en-GB">English (UK)</option>
+            <option value="en-US">English (US)</option>
+            <option value="hi-IN">Hindi</option>
+          </select>
+        </div>
+        <hr>
+        <p class="muted small-text">Signed in as <b id="device-name"></b>.</p>
+        <button id="install" class="ghost" hidden>⤓ Install app</button>
+        <button id="clear-chat" class="ghost">Clear conversation (memory is kept)</button>
+        <button id="logout" class="ghost danger">Sign out</button>
+      </section>
+    </main>
+  </section>
+
+  <script src="/reactor.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

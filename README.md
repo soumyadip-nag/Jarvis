@@ -10,6 +10,11 @@ python Main.py
 
 API keys are read **only** from `.env`, which is git-ignored. Never paste keys into `.py` files.
 
+## Phone app + sync
+
+`cloud/` contains a private cloud brain and an installable phone app that share one
+conversation and memory with this desktop app. See [cloud/README.md](cloud/README.md).
+
 ## Using it
 
 - **Type** a command and press Enter, or click a **quick command**.

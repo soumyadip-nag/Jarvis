@@ -27,7 +27,15 @@ try:
 except Exception:  # pywhatkit needs an internet connection on import
     pywhatkit_search = playonyt = None
 
-client = Groq(api_key=require_key(GROQ_API_KEY, "GROQ_API_KEY"))
+_client = None
+
+
+def groq_client():
+    """Created on first use, so app/volume commands work even without a Groq key."""
+    global _client
+    if _client is None:
+        _client = Groq(api_key=require_key(GROQ_API_KEY, "GROQ_API_KEY"))
+    return _client
 
 SystemChatBot = [{
     "role": "system",
@@ -47,6 +55,7 @@ KNOWN_SITES = {
     "github": "https://github.com",
     "chatgpt": "https://chatgpt.com",
     "netflix": "https://www.netflix.com",
+    "spotify": "https://open.spotify.com",
     "whatsapp": "https://web.whatsapp.com",
 }
 
@@ -83,7 +92,7 @@ def PlayYoutube(query):
 
 def Content(Topic):
     def ContentWriterAI(prompt):
-        completion = client.chat.completions.create(
+        completion = groq_client().chat.completions.create(
             model=GROQ_CONTENT_MODEL,
             messages=SystemChatBot + [{"role": "user", "content": prompt}],
             max_tokens=2048,
