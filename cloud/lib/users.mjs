@@ -1,7 +1,7 @@
 // Who can use Jarvis, and whose request is being handled.
 //
 // The owner signs in with JARVIS_PASSCODE, as before. Anyone else is an entry in JARVIS_USERS, a JSON list:
-//   [{"id":"kohen","name":"Kohen Maity","honorific":"Kohen","passcode":"..."}]
+//   [{"id":"sam","name":"Sam Example","honorific":"Sam","passcode":"..."}]
 // Each person gets a separate space in the store (see store.mjs) and an equal share of every usage limit.
 import { AsyncLocalStorage } from "node:async_hooks";
 

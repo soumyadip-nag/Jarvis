@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 const OWNER = "owner passcode for tests";
-const KOHEN = "kohen passcode for tests";
+const SAM = "sam passcode for tests";
 process.env.JARVIS_LOCAL_STORE = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-users-"));
 process.env.JARVIS_PASSCODE = OWNER;
 process.env.USER_NAME = "Ushnish";
@@ -15,7 +15,7 @@ process.env.GROQ_API_KEY = "test";
 process.env.SERPAPI_KEY = "test";
 process.env.CLOUDFLARE_ACCOUNT_ID = "acct";
 process.env.CLOUDFLARE_API_TOKEN = "test";
-const USERS = JSON.stringify([{ id: "kohen", name: "Kohen Maity", honorific: "Kohen", passcode: KOHEN }]);
+const USERS = JSON.stringify([{ id: "sam", name: "Sam Example", honorific: "Sam", passcode: SAM }]);
 process.env.JARVIS_USERS = USERS;
 
 const say = (content, tokens = 100) => ({ choices: [{ message: { role: "assistant", content } }], usage: { total_tokens: tokens } });
@@ -69,38 +69,38 @@ async function call(method, route, { token, body, ip = "1.1.1.1" } = {}) {
 const login = async (passcode, device = "phone") => (await call("POST", "login", { body: { passcode, device } })).data;
 
 const ushnish = await login(OWNER);
-const kohen = await login(KOHEN);
+const sam = await login(SAM);
 
 test("each passcode signs in as its own person; a wrong one signs in as nobody", async () => {
   assert.equal(ushnish.user.name, "Ushnish");
-  assert.equal(kohen.user.name, "Kohen Maity");
-  assert.equal(kohen.user.honorific, "Kohen");
+  assert.equal(sam.user.name, "Sam Example");
+  assert.equal(sam.user.honorific, "Sam");
   assert.equal((await call("POST", "login", { body: { passcode: "wrong", device: "phone" }, ip: "9.9.9.9" })).status, 401);
 });
 
 test("the passcode is never sent back", async () => {
-  assert.ok(!JSON.stringify(kohen).includes(KOHEN));
-  const sync = await call("GET", "sync?since=0", { token: kohen.token });
-  assert.ok(!JSON.stringify(sync.data).includes(KOHEN));
-  assert.equal(sync.data.user.name, "Kohen Maity");
+  assert.ok(!JSON.stringify(sam).includes(SAM));
+  const sync = await call("GET", "sync?since=0", { token: sam.token });
+  assert.ok(!JSON.stringify(sync.data).includes(SAM));
+  assert.equal(sync.data.user.name, "Sam Example");
 });
 
 test("chat is private to each person", async () => {
   await call("POST", "chat", { token: ushnish.token, body: { text: "Ushnish private message" } });
-  await call("POST", "chat", { token: kohen.token, body: { text: "Kohen private message" } });
+  await call("POST", "chat", { token: sam.token, body: { text: "Sam private message" } });
   const seenBy = async (t) => (await call("GET", "sync?since=0", { token: t })).data.messages.map((m) => m.content).join(" | ");
   assert.match(await seenBy(ushnish.token), /Ushnish private/);
-  assert.doesNotMatch(await seenBy(ushnish.token), /Kohen private/);
-  assert.match(await seenBy(kohen.token), /Kohen private/);
-  assert.doesNotMatch(await seenBy(kohen.token), /Ushnish private/);
+  assert.doesNotMatch(await seenBy(ushnish.token), /Sam private/);
+  assert.match(await seenBy(sam.token), /Sam private/);
+  assert.doesNotMatch(await seenBy(sam.token), /Ushnish private/);
 });
 
 test("Jarvis knows who it is talking to, and doesn't see the other person's history", async () => {
   prompts.length = 0;
-  await call("POST", "chat", { token: kohen.token, body: { text: "Who am I?" } });
+  await call("POST", "chat", { token: sam.token, body: { text: "Who am I?" } });
   const sent = JSON.stringify(prompts[0].messages);
-  assert.match(sent, /assistant of Kohen Maity/);
-  assert.match(sent, /Address the user as \\"Kohen\\"/);
+  assert.match(sent, /assistant of Sam Example/);
+  assert.match(sent, /Address the user as \\"Sam\\"/);
   assert.doesNotMatch(sent, /Ushnish/);
 });
 
@@ -109,9 +109,9 @@ test("memory is private, including facts learned automatically", async () => {
   await Promise.all(pending);
   const memories = async (t) => (await call("GET", "memories", { token: t })).data.memories.map((m) => m.text);
   assert.deepEqual(await memories(ushnish.token), ["The user has a secret plan."]);
-  assert.deepEqual(await memories(kohen.token), []);
+  assert.deepEqual(await memories(sam.token), []);
   prompts.length = 0;
-  await call("POST", "chat", { token: kohen.token, body: { text: "Do I have a secret plan?" } });
+  await call("POST", "chat", { token: sam.token, body: { text: "Do I have a secret plan?" } });
   assert.doesNotMatch(JSON.stringify(prompts[0].messages), /The user has a secret plan/);
 });
 
@@ -119,25 +119,25 @@ test("images are private: another person's image can't be opened even with its i
   const { data } = await call("POST", "chat", { token: ushnish.token, body: { text: "Draw a lion" } });
   const id = data.actions[0].id;
   assert.equal((await call("GET", `images/${id}`, { token: ushnish.token })).status, 200);
-  assert.equal((await call("GET", `images/${id}`, { token: kohen.token })).status, 404);
+  assert.equal((await call("GET", `images/${id}`, { token: sam.token })).status, 404);
 });
 
 test("commands only reach the same person's devices", async () => {
-  const kohenLaptop = await login(KOHEN, "laptop");
+  const samLaptop = await login(SAM, "laptop");
   const ushnishLaptop = await login(OWNER, "laptop");
-  await call("POST", "chat", { token: kohen.token, body: { text: "Open Spotify on my laptop" } });
-  assert.equal((await call("GET", "sync", { token: kohenLaptop.token })).data.commands.length, 1);
+  await call("POST", "chat", { token: sam.token, body: { text: "Open Spotify on my laptop" } });
+  assert.equal((await call("GET", "sync", { token: samLaptop.token })).data.commands.length, 1);
   assert.equal((await call("GET", "sync", { token: ushnishLaptop.token })).data.commands.length, 0);
 });
 
 test("devices show as online per person", async () => {
-  const fresh = await login(KOHEN, "laptop");
+  const fresh = await login(SAM, "laptop");
   await call("GET", "sync", { token: fresh.token });
   assert.equal((await call("GET", "sync", { token: ushnish.token })).data.devices.phone.online, true);
 });
 
 test("each person's home region is their own", async () => {
-  const k = findUser("kohen");
+  const k = findUser("sam");
   await runAsUser(k, () => store().setJSON("weather/home", { name: "Pune" }));
   assert.equal(await store().get("weather/home"), null);
   assert.equal((await runAsUser(k, () => store().get("weather/home"))).name, "Pune");
@@ -145,7 +145,7 @@ test("each person's home region is their own", async () => {
 });
 
 test("the hourly weather job runs for everyone, and one person's failure doesn't stop the rest", async () => {
-  const k = findUser("kohen");
+  const k = findUser("sam");
   await runAsUser(k, () => store().setJSON("weather/home", { name: "Pune", latitude: 18.5, longitude: 73.8, tz: "Asia/Kolkata" }));
   const log = [];
   const original = console.log;
@@ -158,7 +158,7 @@ test("the hourly weather job runs for everyone, and one person's failure doesn't
 test("web searches are split equally, and one person using theirs doesn't affect the other", async () => {
   assert.equal(shareOf(8), 4);
   const tz = "Asia/Kolkata";
-  const k = findUser("kohen");
+  const k = findUser("sam");
   searches = 0;
   for (let i = 0; i < 4; i++) assert.match(await runAsUser(k, () => webSearch("q", tz)), /T: S/);
   assert.match(await runAsUser(k, () => webSearch("q", tz)), /limit of 4 web searches/);
@@ -168,7 +168,7 @@ test("web searches are split equally, and one person using theirs doesn't affect
 });
 
 test("images are split equally per day", async () => {
-  const k = findUser("kohen");
+  const k = findUser("sam");
   assert.equal(shareOf(170), 85);
   await runAsUser(k, () => store().setJSON(`usage/images/${new Date().toISOString().slice(0, 10)}`, { count: 84 }));
   images = 0;
@@ -186,14 +186,14 @@ test("Groq tokens are split per minute: over a share uses the smaller model, the
   try {
     const big = async (t) => (await call("POST", "chat", { token: t, body: { text: "Big request" } })).data.reply.content;
     prompts.length = 0;
-    await big(kohen.token); // 3,000
-    await big(kohen.token); // 6,000: now over on the main model
+    await big(sam.token); // 3,000
+    await big(sam.token); // 6,000: now over on the main model
     assert.equal(prompts[1].model, "openai/gpt-oss-120b");
-    await big(kohen.token);
+    await big(sam.token);
     assert.equal(prompts[2].model, "openai/gpt-oss-20b");
-    await big(kohen.token); // now over on the smaller model too
+    await big(sam.token); // now over on the smaller model too
     prompts.length = 0;
-    assert.match(await big(kohen.token), /share of the AI for this minute/);
+    assert.match(await big(sam.token), /share of the AI for this minute/);
     assert.equal(prompts.length, 0); // nothing was sent to Groq
 
     prompts.length = 0;
@@ -206,8 +206,8 @@ test("Groq tokens are split per minute: over a share uses the smaller model, the
 
 test("wrong passcodes lock out that connection, not everyone", async () => {
   for (let i = 0; i < 9; i++) await call("POST", "login", { body: { passcode: "guess" + i, device: "phone" }, ip: "6.6.6.6" });
-  assert.equal((await call("POST", "login", { body: { passcode: KOHEN, device: "phone" }, ip: "6.6.6.6" })).status, 429);
-  assert.equal((await call("POST", "login", { body: { passcode: KOHEN, device: "phone" }, ip: "7.7.7.7" })).status, 200);
+  assert.equal((await call("POST", "login", { body: { passcode: SAM, device: "phone" }, ip: "6.6.6.6" })).status, 429);
+  assert.equal((await call("POST", "login", { body: { passcode: SAM, device: "phone" }, ip: "7.7.7.7" })).status, 200);
 });
 
 test("tokens from before multiple users still belong to the owner", async () => {
@@ -219,7 +219,7 @@ test("tokens from before multiple users still belong to the owner", async () => 
 
 test("removing someone cuts off their existing sessions", async () => {
   delete process.env.JARVIS_USERS;
-  assert.equal((await call("GET", "sync", { token: kohen.token })).status, 401);
+  assert.equal((await call("GET", "sync", { token: sam.token })).status, 401);
   assert.equal(shareOf(8), 8);
   process.env.JARVIS_USERS = USERS;
 });

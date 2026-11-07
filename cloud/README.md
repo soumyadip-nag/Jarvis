@@ -64,7 +64,7 @@ Each person gets their own chat, memory, images, weather and device sync. They c
 Add people in Netlify with `JARVIS_USERS`, then redeploy:
 
 ```
-[{"id":"kohen","name":"Kohen Maity","honorific":"Kohen","passcode":"a long passphrase"}]
+[{"id":"sam","name":"Sam Example","honorific":"Sam","passcode":"a long passphrase"}]
 ```
 
 `id` is lower-case letters, numbers and dashes, and shouldn't change later, because it decides where that
