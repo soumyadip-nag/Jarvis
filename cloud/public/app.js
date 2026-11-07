@@ -353,35 +353,65 @@
     return audioContext;
   }
 
+  /** Asks for one sentence's audio and decodes it, ready to play. */
+  async function fetchVoice(sentence) {
+    const res = await fetch("/api/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ text: sentence.slice(0, 1500) }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`Voice HTTP ${res.status}`);
+    return audio().decodeAudioData(await res.arrayBuffer());
+  }
+
+  function playVoice(decoded) {
+    return new Promise((resolve) => {
+      const source = audio().createBufferSource();
+      source.buffer = decoded;
+      source.connect(voiceInput);
+      source.onended = resolve;
+      voiceSource = source;
+      source.start();
+    });
+  }
+
+  /**
+   * Generating a whole reply before playing it is what made Jarvis slow to start talking. Each sentence
+   * is requested at once and played as soon as it and those before it are ready.
+   */
   async function speakJarvis(text) {
     const turn = ++voiceTurn;
     setState("speaking", "Speaking");
+    let handedOver = false;
     try {
-      const res = await fetch("/api/speak", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
-        body: JSON.stringify({ text: spokenParts(text).join(" ").slice(0, 1500) }),
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) throw new Error(`Voice HTTP ${res.status}`);
-      const bytes = await res.arrayBuffer();
-      if (turn !== voiceTurn) return;
       const c = audio();
       // Browsers only allow sound after a tap; don't wait forever if it stays blocked.
       await Promise.race([c.resume(), new Promise((resolve) => setTimeout(resolve, 1000))]);
       if (c.state !== "running") throw new Error("Audio is blocked until the screen is tapped");
-      const decoded = await c.decodeAudioData(bytes);
-      if (turn !== voiceTurn) return;
-      await new Promise((resolve) => {
-        const source = c.createBufferSource();
-        source.buffer = decoded;
-        source.connect(voiceInput);
-        source.onended = resolve;
-        voiceSource = source;
-        source.start();
-      });
+
+      const parts = spokenParts(text);
+      const pending = parts.map(fetchVoice);
+      pending.forEach((p) => p.catch(() => {})); // failures are handled below, when each turn comes up
+      for (let i = 0; i < pending.length; i++) {
+        let decoded;
+        try {
+          decoded = await pending[i];
+        } catch (e) {
+          if (i === 0) throw e;
+          // Part way through: let the phone's own voice finish the reply rather than stop mid-answer.
+          if (turn === voiceTurn) {
+            handedOver = true;
+            return speakSystem(parts.slice(i).join(" "));
+          }
+          return;
+        }
+        if (turn !== voiceTurn) return;
+        await playVoice(decoded);
+        if (turn !== voiceTurn) return;
+      }
     } finally {
-      if (turn === voiceTurn && state === "speaking") setState("idle", "Awaiting your command");
+      if (!handedOver && turn === voiceTurn && state === "speaking") setState("idle", "Awaiting your command");
     }
   }
 
@@ -490,13 +520,22 @@
     if (state === "listening") return;
     stopSpeaking();
     setState("listening", "Listening…");
-    try {
-      const { text } = await Native("listen", { lang: settings.lang });
-      if (text) return send(text);
-      setState("idle", "Didn't catch that");
-    } catch (e) {
-      setState("idle", "Awaiting your command");
-      systemMessage(e.message);
+    // Android's speech service can drop the first attempt (errors 5, 8 and 11); a second one usually works.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const { text } = await Native("listen", { lang: settings.lang });
+        if (text) return send(text);
+        setState("idle", "Didn't catch that");
+        return;
+      } catch (e) {
+        if (attempt === 0 && /error (5|8|11)\b/.test(e.message)) {
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          continue;
+        }
+        setState("idle", "Awaiting your command");
+        systemMessage(e.message);
+        return;
+      }
     }
   }
 

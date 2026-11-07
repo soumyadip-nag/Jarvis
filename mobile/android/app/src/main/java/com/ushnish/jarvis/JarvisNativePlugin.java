@@ -219,7 +219,7 @@ public class JarvisNativePlugin extends Plugin {
                 call.reject("Speech recognition isn't available on this phone.");
                 return;
             }
-            if (recognizer != null) recognizer.destroy();
+            releaseRecognizer();
             recognizer = SpeechRecognizer.createSpeechRecognizer(getContext());
             recognizer.setRecognitionListener(new RecognitionListener() {
                 @Override public void onResults(Bundle results) {
@@ -227,8 +227,10 @@ public class JarvisNativePlugin extends Plugin {
                     JSObject out = new JSObject();
                     out.put("text", matches == null || matches.isEmpty() ? "" : matches.get(0));
                     call.resolve(out);
+                    releaseLater();
                 }
                 @Override public void onError(int error) {
+                    releaseLater();
                     if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                         JSObject out = new JSObject();
                         out.put("text", "");
@@ -250,6 +252,19 @@ public class JarvisNativePlugin extends Plugin {
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, call.getString("lang", "en-IN"));
             recognizer.startListening(intent);
         });
+    }
+
+    // Destroying a recogniser and creating another straight away makes the new one fail with
+    // error 11, so release each one when it finishes, not when the next one starts.
+    private void releaseLater() {
+        getActivity().runOnUiThread(this::releaseRecognizer);
+    }
+
+    private void releaseRecognizer() {
+        if (recognizer != null) {
+            recognizer.destroy();
+            recognizer = null;
+        }
     }
 
     // ───────── speaking ─────────
