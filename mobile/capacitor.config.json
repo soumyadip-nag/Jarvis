@@ -1,0 +1,12 @@
+{
+  "appId": "com.ushnish.jarvis",
+  "appName": "Jarvis",
+  "webDir": "www",
+  "server": {
+    "url": "https://my-jarvis-app1.netlify.app",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

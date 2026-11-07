@@ -2,6 +2,10 @@
 (() => {
   "use strict";
   const DEVICE = "phone";
+  // In the Android app, the native side does what a WebView can't: contacts, calls, listening, speaking.
+  const Native = window.Capacitor?.isNativePlatform?.()
+    ? (method, args = {}) => window.Capacitor.nativePromise("JarvisNative", method, args)
+    : null;
   const $ = (s) => document.querySelector(s);
   const store = {
     get(k, d) { try { const v = localStorage.getItem("jarvis." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
@@ -10,7 +14,7 @@
   };
   const defaultLang = ["en-IN", "en-GB", "en-US", "hi-IN"].includes(navigator.language) ? navigator.language : "en-IN";
   const settings = Object.assign(
-    { voice: null, rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, lang: defaultLang },
+    { voice: null, rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang },
     store.get("settings", {}),
   );
   const saveSettings = () => store.set("settings", settings);
@@ -104,7 +108,32 @@
     .map((c) => ({ name: (c.name || [])[0] || "", tel: (c.tel || [])[0] || "" }))
     .filter((c) => c.name && c.tel);
 
+  async function refreshNativeContacts() {
+    try {
+      contacts = (await Native("getContacts")).contacts;
+    } catch (e) {
+      systemMessage(e.message);
+    }
+    renderContactsInfo();
+  }
+
+  /** Calling by voice on the phone: direct in the app unless confirmation is on; the dialler in a browser. */
+  function placeCall(contact) {
+    const dial = () => openUrl(telUrl(contact.tel));
+    if (Native) {
+      if (!settings.confirmCalls) Native("call", { number: contact.tel }).catch(dial);
+    } else if (settings.autoOpen) {
+      dial();
+    }
+  }
+
   function renderContactsInfo() {
+    if (Native) {
+      $("#import-contacts").hidden = true;
+      $("#clear-contacts").hidden = true;
+      $("#contacts-info").textContent = `${contacts.length} found on this phone, including WhatsApp contacts where Android lists them. They are never uploaded.`;
+      return;
+    }
     const supported = "contacts" in navigator && "select" in navigator.contacts;
     $("#import-contacts").hidden = !supported;
     $("#clear-contacts").hidden = !contacts.length;
@@ -238,8 +267,8 @@
 
   // ───────── voice output ─────────
   let voices = [];
-  function loadVoices() {
-    voices = (window.speechSynthesis?.getVoices() || []).filter((v) => v.lang.toLowerCase().startsWith("en"));
+  function loadVoices(list) {
+    voices = (list || window.speechSynthesis?.getVoices() || []).filter((v) => v.lang.toLowerCase().startsWith("en"));
     const select = $("#voice-select");
     select.innerHTML = "";
     if (!voices.length) select.innerHTML = "<option value=''>Default voice</option>";
@@ -259,7 +288,18 @@
 
   const sentences = (t) => t.split(/(?<=[.!?])\s+/).filter(Boolean);
 
+  function speakNative(text) {
+    if (!settings.autoSpeak) return Promise.resolve();
+    let parts = sentences(text);
+    if (parts.length > 4 && text.length >= 250) parts = [...parts.slice(0, 2), "The rest is on your screen."];
+    setState("speaking", "Speaking");
+    return Native("speak", { text: parts.join(" "), rate: settings.rate, pitch: settings.pitch, voice: settings.voice })
+      .catch(() => {})
+      .finally(() => { if (state === "speaking") setState("idle", "Awaiting your command"); });
+  }
+
   function speak(text) {
+    if (Native) return speakNative(text);
     return new Promise((resolve) => {
       const synth = window.speechSynthesis;
       if (!settings.autoSpeak || !synth) return resolve();
@@ -282,14 +322,30 @@
   }
 
   function stopSpeaking() {
-    window.speechSynthesis?.cancel();
+    if (Native) Native("stopSpeaking").catch(() => {});
+    else window.speechSynthesis?.cancel();
     if (state === "speaking") setState("idle", "Awaiting your command");
   }
 
   // ───────── voice input ─────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  async function listenNative() {
+    if (state === "listening") return;
+    stopSpeaking();
+    setState("listening", "Listening…");
+    try {
+      const { text } = await Native("listen", { lang: settings.lang });
+      if (text) return send(text);
+      setState("idle", "Didn't catch that");
+    } catch (e) {
+      setState("idle", "Awaiting your command");
+      systemMessage(e.message);
+    }
+  }
+
   function listen() {
     if (busy) return;
+    if (Native) return listenNative();
     if (!SR) return systemMessage("Voice input isn't supported in this browser. Use Chrome on your Pixel.");
     if (recognition) { recognition.stop(); return; }
     stopSpeaking();
@@ -333,10 +389,13 @@
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
       const call = data.actions.find((a) => a.type === "call_contact" && !a.queued);
+      if (call && Native) await refreshNativeContacts();
       const outcome = call && callOutcome(call.name);
-      if (outcome) data.reply.content = outcome.say;
+      if (outcome) {
+        data.reply.content = outcome.contact && Native && settings.confirmCalls ? `Tap to call ${outcome.contact.name}.` : outcome.say;
+      }
       renderMessage(data.reply, { typewriter: true });
-      if (outcome?.contact && settings.autoOpen) openUrl(telUrl(outcome.contact.tel));
+      if (outcome?.contact) placeCall(outcome.contact);
       const toOpen = data.actions.filter((a) => a.type === "open_url" && !a.queued);
       if (settings.autoOpen && toOpen.length) openUrl(toOpen[0].url);
       await speak(data.reply.content);
@@ -375,6 +434,7 @@
         navigator.vibrate?.(120);
         if (settings.autoOpen) openUrl(cmd.url);
       } else if (cmd.type === "call_contact") {
+        if (Native) await refreshNativeContacts();
         const outcome = callOutcome(cmd.name);
         renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${outcome.say}`, actions: [cmd] });
         navigator.vibrate?.(120);
@@ -478,6 +538,7 @@
     document.body.className = "view-chat";
     $("#device-name").textContent = "Phone";
     if (!reactor) reactor = new Reactor($("#reactor"));
+    if (Native) refreshNativeContacts();
     setState("booting", "Connecting");
     if (!chatEl().children.length) {
       const empty = document.createElement("div");
@@ -541,7 +602,11 @@
 
     // settings
     loadVoices();
-    if (window.speechSynthesis) speechSynthesis.onvoiceschanged = loadVoices;
+    if (Native) {
+      Native("getVoices").then((r) => loadVoices(r.voices)).catch(() => {});
+    } else if (window.speechSynthesis) {
+      speechSynthesis.onvoiceschanged = () => loadVoices();
+    }
     const bindRange = (id, key) => {
       const el = $("#" + id), out = $("#" + id + "-val");
       el.value = settings[key];
@@ -555,6 +620,9 @@
     $("#auto-speak").onchange = (e) => { settings.autoSpeak = e.target.checked; saveSettings(); };
     $("#auto-open").checked = settings.autoOpen;
     $("#auto-open").onchange = (e) => { settings.autoOpen = e.target.checked; saveSettings(); };
+    $("#confirm-calls-row").hidden = !Native;
+    $("#confirm-calls").checked = settings.confirmCalls;
+    $("#confirm-calls").onchange = (e) => { settings.confirmCalls = e.target.checked; saveSettings(); };
     $("#speech-lang").value = settings.lang;
     $("#speech-lang").onchange = (e) => { settings.lang = e.target.value; saveSettings(); };
     $("#test-voice").onclick = () => {

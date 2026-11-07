@@ -19,3 +19,7 @@ Data/*
 # Cloud app
 cloud/node_modules/
 cloud/.netlify/
+
+# Android app
+mobile/node_modules/
+mobile/ci-out/

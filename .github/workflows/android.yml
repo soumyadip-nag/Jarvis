@@ -1,0 +1,84 @@
+# Builds the Android app, tries it on an emulator and publishes everything to the "apk-latest" release.
+name: Android APK
+
+on:
+  push:
+    branches: [claude/busy-ramanujan-6i9tbb, init-upload]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      # Android only installs an update signed with the same key, so keep one key between builds.
+      - name: Restore signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: jarvis-debug-keystore-v1
+
+      - name: Create signing key if needed
+        run: |
+          mkdir -p ~/.android
+          [ -f ~/.android/debug.keystore ] || keytool -genkeypair -v -keystore ~/.android/debug.keystore \
+            -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=Jarvis Debug,O=Jarvis,C=IN"
+
+      - name: Build APK
+        working-directory: mobile
+        run: |
+          mkdir -p ci-out
+          set -o pipefail
+          npm ci 2>&1 | tee ci-out/build.log
+          npx cap sync android 2>&1 | tee -a ci-out/build.log
+          chmod +x android/gradlew
+          (cd android && ./gradlew assembleDebug --no-daemon --stacktrace) 2>&1 | tee -a ci-out/build.log
+          cp android/app/build/outputs/apk/debug/app-debug.apk ci-out/jarvis.apk
+
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Try it on an emulator
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
+          script: bash mobile/ci/smoke.sh
+
+      - name: Publish
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: Jarvis Android (latest build)
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          body: "Built automatically from ${{ github.sha }}. Install jarvis.apk on your phone."
+          files: mobile/ci-out/*

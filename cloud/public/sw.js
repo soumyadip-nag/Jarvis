@@ -1,5 +1,5 @@
 // Caches the app shell so Jarvis opens instantly; API calls always go to the network.
-const CACHE = "jarvis-v2";
+const CACHE = "jarvis-v3";
 const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/reactor.js", "/contacts.js", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {

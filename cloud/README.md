@@ -92,6 +92,13 @@ and you tap Call. If two people match, Jarvis asks which one.
 A web app can't read WhatsApp's contacts, see contacts you haven't imported, or place a call by itself.
 Those would need a native Android app.
 
+## Android app
+
+`mobile/` wraps this web app in a Capacitor shell that adds what a browser can't: reading all contacts
+(including WhatsApp ones where Android lists them), placing calls directly, and native listening and speech.
+The app loads the live site, so web changes reach it without reinstalling. GitHub Actions builds it and
+publishes `jarvis.apk` to the `apk-latest` release.
+
 ## Phone actions
 
 Open apps (YouTube, Spotify, WhatsApp, Maps, Gmail, Instagram…), YouTube/Google searches,
