@@ -4,6 +4,8 @@
 //   POST   /api/chat               {text, tz}                -> {user, reply, actions}
 //   GET    /api/sync?since=<ts>    -> {messages, commands, devices, user}  (one cheap call for polling)
 //   POST   /api/commands/<id>/done
+//   POST   /api/calls              {name, number, goal}: asks the laptop to make a call for the user
+//   POST   /api/calls/report       {name, report, transcript}: the laptop shares how a call went
 //   GET    /api/memories           -> {memories}
 //   POST   /api/memories           {text}
 //   DELETE /api/memories/<id>
@@ -14,12 +16,12 @@
 import { login, verify } from "../../lib/auth.mjs";
 import { runAsUser } from "../../lib/users.mjs";
 import { respond } from "../../lib/brain.mjs";
-import { messagesSince, clearRecent } from "../../lib/messages.mjs";
+import { addMessage, messagesSince, clearRecent } from "../../lib/messages.mjs";
 import { listMemories, addMemories, deleteMemory } from "../../lib/memory.mjs";
 import { getImage } from "../../lib/images.mjs";
 import { transcribe } from "../../lib/llm.mjs";
 import { synthesize, MAX_SPEECH_CHARS } from "../../lib/voice.mjs";
-import { touch, pending, done, status } from "../../lib/devices.mjs";
+import { enqueue, touch, pending, done, status } from "../../lib/devices.mjs";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -46,6 +48,22 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
     const since = Number(url.searchParams.get("since") || 0);
     const [messages, commands, devices] = await Promise.all([messagesSince(since), pending(device), status()]);
     return json({ messages, commands, devices, user: { name: user.name, honorific: user.honorific } });
+  }
+
+  if (route === "POST /calls") {
+    const { name, number, goal } = await body(req);
+    const digits = String(number || "").replace(/[^\d+]/g, "");
+    if (!/^\+?\d{3,15}$/.test(digits)) return json({ error: "Invalid number" }, 400);
+    if (!goal || typeof goal !== "string" || goal.length > 1000) return json({ error: "Invalid goal" }, 400);
+    await enqueue("laptop", { type: "ai_call", name: String(name || digits).slice(0, 100), number: digits, goal });
+    return json({ ok: true });
+  }
+
+  if (route === "POST /calls/report") {
+    const { name, report, transcript } = await body(req);
+    if (!report || typeof report !== "string") return json({ error: "Invalid report" }, 400);
+    const content = `📞 Call to ${String(name || "them").slice(0, 100)}: ${report}${transcript ? `\n\nWhat was said:\n${transcript}` : ""}`;
+    return json({ message: await addMessage({ role: "assistant", content: content.slice(0, 8000), device: "laptop" }) });
   }
 
   if (req.method === "POST" && parts[0] === "commands" && parts[2] === "done") {

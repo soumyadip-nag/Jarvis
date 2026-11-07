@@ -15,6 +15,7 @@ const TOKENS_PER_DAY = () => Number(process.env.GROQ_TOKENS_PER_DAY) || 200000;
 // Half of Cloudflare's free 10,000 Neurons a day, so that images, which use the same allowance, keep working.
 const BACKUP_NEURONS_PER_DAY = 5000;
 const neuronsFor = (usage) => ((usage?.prompt_tokens || 0) * 31818 + (usage?.completion_tokens || 0) * 68182) / 1e6;
+const LEAKED_REASONING = /<\|[a-z_]+\|>/; // the model's internal markers, which must never reach the user
 const AI_TIMEOUT_MS = 9000; // long enough for a normal reply, and leaves time to try the next provider
 
 export class ShareUsedError extends Error {
@@ -130,6 +131,10 @@ export async function chat({ messages, tools, model = MODEL(), json = false, max
     const message = data?.choices?.[0]?.message;
     if (!message?.content?.trim() && !message?.tool_calls?.length) {
       failed(provider, new Error(`${provider.label} returned an empty reply`));
+      continue;
+    }
+    if (LEAKED_REASONING.test(message.content || "")) {
+      failed(provider, new Error(`${provider.label} leaked its hidden reasoning into the reply`));
       continue;
     }
     await recordUsage(provider, data.usage);

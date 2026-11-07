@@ -67,7 +67,8 @@ Devices and actions:
 - After an action on a device, confirm in a few words (for example "Done, ${HONORIFIC()}." or "Opening YouTube."). Don't read out URLs.
 - After looking something up, such as the weather, just give the answer once, with no confirmation.
 - You cannot set alarms or reminders yet; say so politely if asked.
-- Whenever asked to call someone, always use phone_action with action "call" and their name as the target. The phone looks up its own contacts, so you never need their number. Never say you don't have a number, even if an earlier call in this conversation went differently.
+- Calls come in two kinds. If the request to call someone also says anything to ask, tell or find out, you do the talking: use ai_call, as in "call Sam and ask if he's free" or "ring Sam and tell him I'm late".
+- If it only says to call someone, with nothing to ask or tell them, the user will do the talking: use phone_action with action "call" and their name as the target. The phone looks up its own contacts, so you never need their number. Never say you don't have a number, even if an earlier call in this conversation went differently.
 - For any weather question use get_weather, never web_search. Give the conditions in a sentence or two. If the result says live weather is unavailable, say when you last checked and do not present it as current.
 - Web searches are limited each day, so only use web_search when the answer really needs current information.
 - When asked to create a picture, use generate_image. It appears in the chat by itself. Never claim an image was made if the tool reported an error.
@@ -81,7 +82,8 @@ function tools() {
       type: "function",
       function: {
         name: "phone_action",
-        description: "Do something on the user's Android phone: open an app or website, search, play music, navigate, call, text or email.",
+        description: "Do something on the user's Android phone: open an app or website, search, play music, navigate, call, text or email. " +
+          "A call here is for the user to talk themselves. If there's anything to ask or tell the person, use ai_call instead.",
         parameters: {
           type: "object",
           properties: {
@@ -97,6 +99,22 @@ function tools() {
             text: { type: "string", description: "Optional message body for sms / whatsapp / email." },
           },
           required: ["action", "target"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "ai_call",
+        description: "Phone someone and hold the conversation yourself on the user's behalf, then report back in the chat. " +
+          "Use this whenever the user says to call someone and ask, tell or find out anything.",
+        parameters: {
+          type: "object",
+          properties: {
+            contact: { type: "string", description: "The person's name as the user said it, or the phone number if they gave one. Never invent a number." },
+            goal: { type: "string", description: "What to say or find out on the call, written as an instruction, using the user's own words where they matter." },
+          },
+          required: ["contact", "goal"],
         },
       },
     },
@@ -213,6 +231,29 @@ async function runTool(name, args, ctx) {
       return (await isOnline("phone"))
         ? `Sent to the phone: ${link.label}`
         : `Queued for the phone (${link.label}); it will appear when the Jarvis app is next opened there.`;
+    }
+    case "ai_call": {
+      const contact = String(args.contact || "").trim();
+      const goal = String(args.goal || "").trim();
+      if (!contact || !goal) return "Ask who to call and what to say.";
+      if (!(await isOnline("laptop"))) {
+        return "Couldn't start the call: calls run on the laptop, and the Jarvis desktop app isn't running there. Tell the user to open it and ask again.";
+      }
+      if (/^[+\d][\d\s()-]{2,}$/.test(contact)) {
+        await enqueue("laptop", { type: "ai_call", name: contact, number: contact.replace(/[^\d+]/g, ""), goal });
+        return `The laptop is calling ${contact}. Tell the user you'll report back in the chat when the call ends.`;
+      }
+      const action = { type: "ai_call", device: "phone", name: contact, goal, label: `Call ${contact}` };
+      if (ctx.device === "phone") {
+        ctx.actions.push(action);
+        return `The phone is finding "${contact}" in its contacts and will say what happens. Reply only "One moment."`;
+      }
+      if (!(await isOnline("phone"))) {
+        return "Couldn't start the call: names are looked up in the contacts on the phone, and the Jarvis app isn't open there. Tell the user to open it and ask again, or to give the number.";
+      }
+      await enqueue("phone", action);
+      ctx.actions.push({ ...action, queued: true });
+      return `The phone is finding "${contact}" in its contacts, then the laptop will call them. Tell the user you'll report back in the chat.`;
     }
     case "laptop_command": {
       const action = { type: "laptop_command", device: "laptop", command: args.command, label: args.command };

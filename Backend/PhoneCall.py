@@ -1,31 +1,35 @@
-"""Experiment: a short live conversation by Jarvis on a call running through Windows Phone Link.
+"""Jarvis making a phone call on the user's own number, through Windows Phone Link.
 
-Start a call from Phone Link on the laptop, then run this while it's connected:
+The desktop app runs this as its own process when asked to call someone (see CloudAssistant.py). To try it on a
+call you've already started in Phone Link:
 
-    .venv\\Scripts\\python.exe tools\\laptop_call_conversation.py --goal "Ask what time they're free tomorrow"
+    .venv\\Scripts\\python.exe -m Backend.PhoneCall --goal "Ask what time they're free tomorrow"
 
-It prints how long each step of every turn took, then a report of the call, and saves both to Data. Only call
-someone who knows it's coming: Jarvis says it's an AI and that the call is being recorded.
+Jarvis always says it's an AI and that the call is being recorded. What the other person says is saved in Data.
 """
 import argparse
+import asyncio
 import datetime
 import io
 import itertools
 import json
 import os
 import queue
+import re
 import time
 import urllib.request
 import wave
 from concurrent.futures import ThreadPoolExecutor
 
+import edge_tts
 import numpy as np
 import sounddevice as sd
 from groq import APIError, Groq
+from pedalboard.io import AudioFile
 
-from laptop_call_test import find_call_devices, render_speech
-
-from Backend.config import ASSISTANT_NAME, DATA_DIR, GROQ_API_KEY, GROQ_CHAT_MODEL, GROQ_ROUTER_MODEL, USERNAME
+from Backend.config import (
+    ASSISTANT_NAME, ASSISTANT_VOICE, DATA_DIR, GROQ_API_KEY, GROQ_CHAT_MODEL, GROQ_ROUTER_MODEL, USERNAME, VOICE_PITCH, VOICE_RATE,
+)
 
 DEFAULT_GOAL = f"This is a test call. Ask how their day is going and whether they have a message for {USERNAME}."
 MAX_TURNS = 6
@@ -38,6 +42,10 @@ END_OF_SPEECH_SECONDS = 1.0
 NO_SPEECH_SECONDS = 10
 ECHO_SECONDS = 0.3         # What's heard straight after Jarvis stops is ignored, in case it's its own echo.
 START_SECONDS = 1.5        # The call's audio takes a moment to start, and the first second can be lost.
+RING_SECONDS = 60          # How long to wait for someone to answer.
+AUDIO_START_SECONDS = 25   # The call's audio devices may not be usable until the call is under way.
+# Ringing and caller tunes are as loud as speech, so an answer only counts once a greeting is recognised.
+GREETING = re.compile(r"\b(hello|hallo|helo|hi|hey|haan|han|ji|yes|yeah|speaking|who|kaun|ke|bolo|boliye)\b", re.I)
 # Said as soon as they stop talking, since a real reply takes a couple of seconds. Made before the call, so instant.
 ACKNOWLEDGEMENTS = ("Right.", "I see.", "Understood.", "Very good.")
 UNCLEAR_MARK = "[unclear]"
@@ -52,6 +60,37 @@ COMPARE_RECOGNISERS = (
     "Reply with nothing else."
 )
 CANT_CONTINUE = f"I'm sorry, I'm having a technical problem, so I'll have to end the call here. Goodbye. {END_MARK}"
+
+
+class CallFailed(Exception):
+    pass
+
+
+def find_call_devices():
+    """The Pixel's hands-free devices. WASAPI is preferred: it's the host API that handles Bluetooth calls best."""
+    wasapi = next((i for i, api in enumerate(sd.query_hostapis()) if "WASAPI" in api["name"]), None)
+    candidates = {"input": [], "output": []}
+    for index, device in enumerate(sd.query_devices()):
+        name = device["name"].lower()
+        if "hands-free" not in name or "pixel" not in name:
+            continue
+        rank = 0 if device["hostapi"] == wasapi else 1
+        if device["max_input_channels"]:
+            candidates["input"].append((rank, index, device))
+        if device["max_output_channels"]:
+            candidates["output"].append((rank, index, device))
+    pick = lambda found: min(found, key=lambda c: c[:2])[1:] if found else (None, None)
+    return pick(candidates["input"]), pick(candidates["output"])
+
+
+def render_speech(text, rate):
+    """Renders speech in the Jarvis voice at the device's sample rate."""
+    path = DATA_DIR / "call_speech.mp3"
+    asyncio.run(edge_tts.Communicate(text, ASSISTANT_VOICE, rate=VOICE_RATE, pitch=VOICE_PITCH).save(str(path)))
+    with AudioFile(str(path)) as f:
+        audio, source_rate = f.read(f.frames).mean(axis=0), f.samplerate
+    length = int(len(audio) * rate / source_rate)
+    return np.interp(np.linspace(0, len(audio) - 1, length), np.arange(len(audio)), audio).astype(np.float32)
 
 
 class SpeechDetector:
@@ -202,12 +241,12 @@ def recognise(client, audio, rate, asked):
     return (None if not answer or UNCLEAR_MARK in answer else answer), heard
 
 
-def hear_and_reply(client, args, history, audio, rate, out_rate):
+def hear_and_reply(client, goal, history, audio, rate, out_rate):
     """One turn's slow work: returns (what they said, what was heard, the reply, its audio, seconds for each step)."""
     t0 = time.time()
     text, heard = recognise(client, audio, rate, history[-1]["content"])
     t1 = time.time()
-    reply = think(client, args.goal, [*history, {"role": "user", "content": text or COULD_NOT_HEAR}])
+    reply = think(client, goal, [*history, {"role": "user", "content": text or COULD_NOT_HEAR}])
     t2 = time.time()
     speech = render_speech(reply.replace(END_MARK, "").strip() or "Thank you. Goodbye.", out_rate)
     return text, heard, reply, speech, (t1 - t0, t2 - t1, time.time() - t2)
@@ -233,7 +272,7 @@ class Call:
     def __init__(self):
         (self.mic_index, mic), (self.out_index, out) = find_call_devices()
         if not (mic and out):
-            raise SystemExit("The Pixel's hands-free devices are missing. Is it connected in Phone Link?")
+            raise CallFailed("your Pixel isn't connected to the laptop in Phone Link")
         self.mic_rate, self.out_rate = int(mic["default_samplerate"]), int(out["default_samplerate"])
         self.heard = queue.Queue()
         self.dropouts = 0
@@ -248,86 +287,151 @@ class Call:
         sd.play(np.concatenate([np.zeros(int(self.out_rate * 0.2), np.float32), speech]), self.out_rate,
                 device=self.out_index, blocking=True, latency="high")
 
-    def listen(self):
-        """Waits for the other person's turn. Returns (audio, seconds waiting for them), or (None, seconds)."""
+    def listen(self, no_speech_seconds=NO_SPEECH_SECONDS, **detector_options):
+        """Waits for the other person's turn. Returns its audio, or None if nobody spoke or the call has gone quiet."""
         time.sleep(ECHO_SECONDS)
         while not self.heard.empty():
             self.heard.get_nowait()
-        detector, started = SpeechDetector(self.mic_rate), time.time()
+        detector, started = SpeechDetector(self.mic_rate, **detector_options), time.time()
         print("Listening...")
         while True:
-            audio = detector.feed(self.heard.get(timeout=5))
+            try:
+                audio = detector.feed(self.heard.get(timeout=5))
+            except queue.Empty:
+                return None
             if audio is not None:
-                return audio, time.time() - started
-            if not detector.talking and time.time() - started > NO_SPEECH_SECONDS:
-                return None, time.time() - started
+                return audio
+            if not detector.talking and time.time() - started > no_speech_seconds:
+                return None
+
+    def open_input(self):
+        """Starts hearing the call. Its audio devices can refuse until the call is under way, so keep trying."""
+        deadline = time.time() + AUDIO_START_SECONDS
+        while True:
+            try:
+                stream = sd.InputStream(device=self.mic_index, samplerate=self.mic_rate, channels=1, dtype="float32",
+                                        blocksize=int(self.mic_rate * 0.03), callback=self.on_audio, latency="high")
+                stream.start()
+                return stream
+            except sd.PortAudioError as e:
+                if time.time() > deadline:
+                    raise CallFailed(f"the call's audio never became available ({e})") from None
+                time.sleep(1)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--goal", default=DEFAULT_GOAL)
-    args = parser.parse_args()
+def is_greeting(text):
+    return bool(GREETING.search(text))
 
+
+def wait_for_answer(call, heard_words):
+    """True once someone says hello. `heard_words` turns audio into text."""
+    deadline = time.time() + RING_SECONDS
+    while time.time() < deadline:
+        audio = call.listen(no_speech_seconds=max(deadline - time.time(), 1), end_seconds=0.5, longest_seconds=5)
+        if audio is None:
+            continue
+        words = heard_words(audio)
+        print(f"Heard while waiting: {words!r}")
+        if is_greeting(words):
+            return True
+        time.sleep(2)  # the recogniser allows about 20 requests a minute, and a call needs them later
+    return False
+
+
+def dial(number):
+    """Asks Phone Link to call a number. It's the app registered for tel: links."""
+    try:
+        os.startfile(f"tel:{number}")
+    except OSError as e:
+        raise CallFailed(f"Phone Link wouldn't start the call ({e})") from None
+
+
+def run_call(goal, number=None):
+    """Holds the call and returns {"outcome": "done" | "no_answer", "report", "transcript"}. Raises CallFailed.
+
+    With a number, Jarvis dials and waits for someone to say hello. Without one, it joins a call already under way.
+    """
     call = Call()
     client = Groq(api_key=GROQ_API_KEY, max_retries=0, timeout=AI_TIMEOUT_SECONDS)
+    # Everything that could fail comes before dialling: nobody should answer to find Jarvis has nothing to say.
     first_line = ask(client, [
-        {"role": "system", "content": instructions(args.goal)},
+        {"role": "system", "content": instructions(goal)},
         {"role": "user", "content": "(The call has just connected and you've introduced yourself. Say your first line.)"},
     ])
     if not first_line:
-        raise SystemExit("The AI isn't available, probably because a Groq limit is used up, so Jarvis won't start.")
+        raise CallFailed("the AI isn't available, probably because its free limits are used up")
     opening = (
         f"Hello, this is {ASSISTANT_NAME}, an A I assistant calling on behalf of {USERNAME}. "
         "This call is being recorded. " + first_line.replace(END_MARK, "")
     )
+    opening_speech = render_speech(opening, call.out_rate)
     acknowledgements = itertools.cycle([render_speech(a, call.out_rate) for a in ACKNOWLEDGEMENTS])
-    input("\nWith the call connected, press Enter and Jarvis will start...")
+
+    if number:
+        print(f"Dialling {number}")
+        dial(number)
+    else:
+        input("\nWith the call connected, press Enter and Jarvis will start...")
 
     history, timings, silences = [{"role": "assistant", "content": opening}], [], 0
     call_started, recognised = datetime.datetime.now(), []
-    block = int(call.mic_rate * 0.03)
-    with ThreadPoolExecutor(1) as background, sd.InputStream(
-        device=call.mic_index, samplerate=call.mic_rate, channels=1, dtype="float32", blocksize=block,
-        callback=call.on_audio, latency="high",
-    ):
-        time.sleep(START_SECONDS)
-        print(f"{ASSISTANT_NAME}: {opening}")
-        call.say(render_speech(opening, call.out_rate))
+    stream = call.open_input()
+    try:
+        with ThreadPoolExecutor(1) as background:
+            if number:
+                heard_words = lambda audio: client.audio.transcriptions.create(
+                    file=("call.wav", to_wav(audio, call.mic_rate)), model="whisper-large-v3-turbo", language="en",
+                ).text
+                try:
+                    answered = wait_for_answer(call, heard_words)
+                except APIError as e:
+                    raise CallFailed(f"couldn't listen for an answer ({str(e)[:120]})") from None
+                if not answered:
+                    return {
+                        "outcome": "no_answer", "transcript": "",
+                        "report": f"Nobody seemed to answer within {RING_SECONDS} seconds. If the call is still going, please end it in Phone Link.",
+                    }
+            else:
+                time.sleep(START_SECONDS)
+            print(f"{ASSISTANT_NAME}: {opening}")
+            call.say(opening_speech)
 
-        for turn in range(MAX_TURNS):
-            audio, waited = call.listen()
-            if audio is None:
-                silences += 1
-                if silences == 2:
-                    print("(no answer twice, ending the call)")
-                    call.say(render_speech("I can't hear anyone, so I'll end the call here. Goodbye.", call.out_rate))
-                    history.append({"role": "assistant", "content": "I can't hear anyone, so I'll end the call here. Goodbye."})
+            for turn in range(MAX_TURNS):
+                audio = call.listen()
+                if audio is None:
+                    silences += 1
+                    if silences == 2:
+                        print("(no answer twice, ending the call)")
+                        call.say(render_speech("I can't hear anyone, so I'll end the call here. Goodbye.", call.out_rate))
+                        history.append({"role": "assistant", "content": "I can't hear anyone, so I'll end the call here. Goodbye."})
+                        break
+                    call.say(render_speech("Sorry, are you still there?", call.out_rate))
+                    continue
+                silences = 0
+
+                (DATA_DIR / f"call_{call_started:%Y%m%d_%H%M%S}_turn{turn + 1}.wav").write_bytes(to_wav(audio, call.mic_rate))
+                started = time.time()
+                work = background.submit(hear_and_reply, client, goal, history, audio, call.mic_rate, call.out_rate)
+                call.say(next(acknowledgements))
+                text, heard, reply, speech, steps = work.result()
+                recognised.append(f"{turn + 1}. {heard}")
+                pause = time.time() - started + END_OF_SPEECH_SECONDS
+                timings.append((*steps, pause))
+                print(f"Them: {text or COULD_NOT_HEAR}")
+                history.append({"role": "user", "content": text or COULD_NOT_HEAR})
+                ending = wants_to_end(reply) or turn == MAX_TURNS - 1
+                reply = reply.replace(END_MARK, "").strip() or "Thank you. Goodbye."
+                print(f"{ASSISTANT_NAME}: {reply}")
+                print(f"  [{steps[0]:.1f}s hearing, {steps[1]:.1f}s thinking, {steps[2]:.1f}s voice; {pause:.1f}s until the full reply]")
+                history.append({"role": "assistant", "content": reply})
+                call.say(speech)
+                if ending:
                     break
-                call.say(render_speech("Sorry, are you still there?", call.out_rate))
-                continue
-            silences = 0
+    finally:
+        stream.close()
 
-            (DATA_DIR / f"call_{call_started:%Y%m%d_%H%M%S}_turn{turn + 1}.wav").write_bytes(to_wav(audio, call.mic_rate))
-            started = time.time()
-            work = background.submit(hear_and_reply, client, args, history, audio, call.mic_rate, call.out_rate)
-            call.say(next(acknowledgements))
-            text, heard, reply, speech, steps = work.result()
-            recognised.append(f"{turn + 1}. {heard}")
-            pause = time.time() - started + END_OF_SPEECH_SECONDS
-            timings.append((*steps, pause))
-            print(f"Them: {text or COULD_NOT_HEAR}")
-            history.append({"role": "user", "content": text or COULD_NOT_HEAR})
-            ending = wants_to_end(reply) or turn == MAX_TURNS - 1
-            reply = reply.replace(END_MARK, "").strip() or "Thank you. Goodbye."
-            print(f"{ASSISTANT_NAME}: {reply}")
-            print(f"  [{steps[0]:.1f}s hearing, {steps[1]:.1f}s thinking, {steps[2]:.1f}s voice; {pause:.1f}s until the full reply]")
-            history.append({"role": "assistant", "content": reply})
-            call.say(speech)
-            if ending:
-                break
-
-    transcript, report = write_report(client, args.goal, history)
-    lines = [f"Goal: {args.goal}", "", transcript, "", f"Report: {report}", "", "What each recogniser heard:", *recognised,
+    transcript, report = write_report(client, goal, history)
+    lines = [f"Goal: {goal}", "", transcript, "", f"Report: {report}", "", "What each recogniser heard:", *recognised,
              "", f"Audio dropouts: {call.dropouts}"]
     if timings:
         average = lambda step: np.mean([t[step] for t in timings])
@@ -337,6 +441,23 @@ def main():
     path.write_text("\n".join(lines), encoding="utf-8")
     print("\n" + "\n".join(lines[lines.index(f"Report: {report}"):]))
     print(f"\nSaved to {path}")
+    return {"outcome": "done", "report": report, "transcript": transcript}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--goal", required=True)
+    parser.add_argument("--number", help="Dial this number. Without it, Jarvis joins a call already under way.")
+    parser.add_argument("--result", help="Write the outcome to this JSON file.")
+    args = parser.parse_args()
+    try:
+        result = run_call(args.goal, args.number)
+    except CallFailed as e:
+        print(f"The call failed: {e}")
+        result = {"outcome": "failed", "report": f"I couldn't make the call: {e}.", "transcript": ""}
+    if args.result:
+        with open(args.result, "w", encoding="utf-8") as f:
+            json.dump(result, f)
 
 
 if __name__ == "__main__":

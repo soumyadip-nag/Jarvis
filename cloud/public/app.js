@@ -147,11 +147,20 @@
     await call();
   }
 
+  /** A call Jarvis holds itself: the number stays on the phone until this one is sent for the laptop to dial. */
+  async function startAiCall(a) {
+    if (Native) await refreshNativeContacts();
+    const outcome = callOutcome(a.name);
+    if (!outcome.contact) return outcome.say;
+    await api("calls", { method: "POST", body: { name: outcome.contact.name, number: outcome.contact.tel, goal: a.goal } });
+    return `Your laptop is calling ${outcome.contact.name}, ${profile.honorific}. I'll report back here when the call ends.`;
+  }
+
   function renderContactsInfo() {
     if (Native) {
       $("#import-contacts").hidden = true;
       $("#clear-contacts").hidden = true;
-      $("#contacts-info").textContent = `${contacts.length} found on this phone, including WhatsApp contacts where Android lists them. They are never uploaded.`;
+      $("#contacts-info").textContent = `${contacts.length} found on this phone, including WhatsApp contacts where Android lists them. They stay here, except the number of someone you ask Jarvis to call for you, which goes to your laptop.`;
       return;
     }
     const supported = "contacts" in navigator && "select" in navigator.contacts;
@@ -160,8 +169,8 @@
     $("#contacts-info").textContent = !supported
       ? "This browser can't read your contacts. Use Chrome on your Pixel."
       : contacts.length
-        ? `${contacts.length} imported. Numbers stay on this phone and are never uploaded. Import again to add more.`
-        : "Choose the people Jarvis can call. Numbers stay on this phone and are never uploaded.";
+        ? `${contacts.length} imported. Numbers stay on this phone, except the number of someone you ask Jarvis to call for you, which goes to your laptop. Import again to add more.`
+        : "Choose the people Jarvis can call. Numbers stay on this phone, except the number of someone you ask Jarvis to call for you, which goes to your laptop.";
   }
 
   async function importContacts() {
@@ -635,6 +644,10 @@
       seen.add(data.user.id);
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
+      const aiCall = data.actions.find((a) => a.type === "ai_call" && !a.queued);
+      if (aiCall) {
+        data.reply.content = await startAiCall(aiCall).catch((e) => `I couldn't start that call, ${profile.honorific}: ${e.message}`);
+      }
       const call = data.actions.find((a) => a.type === "call_contact" && !a.queued);
       if (call && Native) await refreshNativeContacts();
       const outcome = call && callOutcome(call.name);
@@ -692,6 +705,13 @@
         });
         navigator.vibrate?.(120);
         if (settings.autoOpen) openUrl(cmd.url);
+      } else if (cmd.type === "ai_call") {
+        // The same rule as on the laptop: a call happens when it was asked for, or not at all.
+        const say = Date.now() - cmd.ts > 120_000
+          ? `I didn't call ${cmd.name}, because the request from your laptop had waited too long.`
+          : await startAiCall(cmd).catch((e) => `I couldn't start that call: ${e.message}`);
+        renderMessage({ role: "assistant", ts: cmd.ts, content: say });
+        navigator.vibrate?.(120);
       } else if (cmd.type === "call_contact") {
         if (Native) await refreshNativeContacts();
         const outcome = callOutcome(cmd.name);

@@ -108,5 +108,8 @@ class CloudClient:
             except urllib.error.URLError as e:
                 raise CloudError(f"Can't reach the Jarvis server ({e.reason}).") from None
 
+    def report_call(self, name, report, transcript=""):
+        self._request("POST", "calls/report", {"name": name, "report": report, "transcript": transcript})
+
     def done(self, command_id):
         self._request("POST", f"commands/{command_id}/done", {})

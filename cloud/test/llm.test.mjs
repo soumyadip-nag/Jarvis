@@ -67,6 +67,7 @@ const failures = {
   "an outage": () => new Response("down", { status: 503 }),
   "a rejected key": () => new Response("no", { status: 401 }),
   "an empty reply": () => answer(""),
+  "leaked reasoning": () => answer("<|channel|>analysis We should say hello.<|end|>"),
   "nonsense": () => new Response("not json"),
   "being too slow": () => { throw new DOMException("timed out", "TimeoutError"); },
   "no connection": () => { throw new TypeError("fetch failed"); },
