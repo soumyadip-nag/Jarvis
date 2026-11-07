@@ -25,6 +25,22 @@ export async function chat({ messages, tools, model = MODEL(), json = false, max
   return data.choices[0].message;
 }
 
+/** Turns recorded speech into text with Groq's Whisper. */
+export async function transcribe(audio, filename = "audio.wav") {
+  if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is not set on the server.");
+  const form = new FormData();
+  form.append("file", new Blob([audio]), filename);
+  form.append("model", process.env.GROQ_WHISPER_MODEL || "whisper-large-v3-turbo");
+  form.append("response_format", "json");
+  const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return (await res.json()).text || "";
+}
+
 /** Returns int8 vectors (arrays), or null when no Cohere key / on failure. */
 export async function embed(texts, inputType = "search_document") {
   if (!process.env.CohereAPIKey || !texts.length) return null;

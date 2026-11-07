@@ -24,6 +24,10 @@ const searches = [];
 let hiccuped = false;
 
 globalThis.fetch = async (url, init) => {
+  if (String(url).includes("audio/transcriptions")) {
+    assert.equal(init.body.get("model"), "whisper-large-v3-turbo");
+    return new Response(JSON.stringify({ text: "Hello Jarvis" }));
+  }
   if (String(url).includes("serpapi")) {
     searches.push(String(url));
     return new Response(JSON.stringify({ organic_results: [{ title: "Result", snippet: "Something happened" }] }));
@@ -240,6 +244,14 @@ test("the voice endpoint needs a login and valid text, and text can't break its 
   assert.equal((await call("POST", "speak", { token: phone, body: {} })).status, 400);
   assert.equal((await call("POST", "speak", { token: phone, body: { text: "x".repeat(1501) } })).status, 400);
   assert.equal(escapeForSpeech(`Tom & <Jerry> "said" it's`), "Tom &amp; &lt;Jerry&gt; &quot;said&quot; it&apos;s");
+});
+
+test("recordings can be transcribed, only with a login and within a size limit", async () => {
+  const audio = Buffer.from("fake-wav").toString("base64");
+  assert.equal((await call("POST", "transcribe", { body: { audio } })).status, 401);
+  assert.equal((await call("POST", "transcribe", { token: phone, body: {} })).status, 400);
+  assert.equal((await call("POST", "transcribe", { token: phone, body: { audio: "x".repeat(4_000_001) } })).status, 400);
+  assert.equal((await call("POST", "transcribe", { token: phone, body: { audio } })).data.text, "Hello Jarvis");
 });
 
 test("brute force is locked out", async () => {

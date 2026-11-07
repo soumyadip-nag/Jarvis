@@ -9,12 +9,14 @@
 //   DELETE /api/memories/<id>
 //   GET    /api/images/<id>        -> image bytes
 //   POST   /api/speak              {text} -> MP3 of the Jarvis voice
+//   POST   /api/transcribe         {audio: base64 WAV} -> {text}; the audio is not stored
 //   DELETE /api/history            clears the on-screen conversation (archive and memory are kept)
 import { login, verify } from "../../lib/auth.mjs";
 import { respond } from "../../lib/brain.mjs";
 import { messagesSince, clearRecent } from "../../lib/messages.mjs";
 import { listMemories, addMemories, deleteMemory } from "../../lib/memory.mjs";
 import { getImage } from "../../lib/images.mjs";
+import { transcribe } from "../../lib/llm.mjs";
 import { synthesize, MAX_SPEECH_CHARS } from "../../lib/voice.mjs";
 import { touch, pending, done, status } from "../../lib/devices.mjs";
 
@@ -68,6 +70,12 @@ export default async (req, context) => {
       return new Response(image.bytes, {
         headers: { "Content-Type": image.mime, "Cache-Control": "private, max-age=86400" },
       });
+    }
+
+    if (route === "POST /transcribe") {
+      const { audio } = await body(req);
+      if (!audio || typeof audio !== "string" || audio.length > 4_000_000) return json({ error: "Invalid audio" }, 400);
+      return json({ text: await transcribe(Buffer.from(audio, "base64")) });
     }
 
     if (route === "POST /speak") {

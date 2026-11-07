@@ -107,6 +107,13 @@
             <option value="hi-IN">Hindi</option>
           </select>
         </div>
+        <div class="setting" id="call-test" hidden>
+          <label for="call-test-number">Jarvis call test (experiment)</label>
+          <p class="muted small-text">Calls this number on speaker and Jarvis says it is an AI calling for Ushnish, then listens for 10 seconds. Only call someone who knows it's coming, and leave the phone on a table in a quiet room. Tap the notification when they answer.</p>
+          <input id="call-test-number" type="tel" placeholder="Phone number" autocomplete="off">
+          <button id="call-test-start" class="ghost">☎ Start test call</button>
+          <div id="call-test-result" class="muted small-text"></div>
+        </div>
         <hr>
         <p class="muted small-text">Signed in as <b id="device-name"></b>.</p>
         <p class="muted small-text">Weather data by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0).</p>

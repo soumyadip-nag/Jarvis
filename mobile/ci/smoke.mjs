@@ -33,4 +33,14 @@ console.log("getVoices:", String(voices).slice(0, 300));
 console.log("speak:", await native("speak", { text: "All systems are online.", rate: 0.95, pitch: 0.85 }));
 console.log("listen:", await native("listen", { lang: "en-IN" }));
 console.log("call:", await native("call", { number: "+15551234567" }));
+
+// The call test on the emulator's fake line: nobody answers, so it starts by itself after 25 seconds.
+await new Promise((r) => setTimeout(r, 6000));
+console.log("call test:", await evaluate(
+  `Promise.race([
+     Capacitor.nativePromise("JarvisNative", "startCallTest", { number: "+15551234567", message: "This is a test." })
+       .then((r) => { const wavLength = (r.wav || "").length; delete r.wav; return JSON.stringify({ ...r, wavLength }); }),
+     new Promise((r) => setTimeout(() => r("no answer after 90s"), 90000)),
+   ]).catch((e) => "ERROR " + e.message)`,
+));
 socket.close();

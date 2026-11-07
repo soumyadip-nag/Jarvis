@@ -442,6 +442,50 @@
 
   // ───────── voice input ─────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // ───────── experiment: can Jarvis talk on a normal call through the speaker? ─────────
+  async function runCallTest() {
+    const number = $("#call-test-number").value.trim();
+    const out = $("#call-test-result");
+    if (!/^[+\d][\d\s()-]{2,}$/.test(number)) { out.textContent = "Enter a phone number first."; return; }
+    if (!confirm(`Call ${number} now? Jarvis will speak on speaker and record for up to a minute.`)) return;
+
+    stopSpeaking();
+    const button = $("#call-test-start");
+    button.disabled = true;
+    out.textContent = "Calling. Tap the notification when they answer.";
+    const message = "Hello, this is Jarvis, an A I assistant calling on behalf of Ushnish. This is a test call and this call is being recorded. Please say a few words after this message.";
+    try {
+      const r = await Native("startCallTest", { number, message });
+      const peaks = r.loudestPerSecond || [];
+      const loudest = peaks.length ? Math.max(...peaks) : 0;
+      const verdict = r.recordError ? `The mic failed: ${r.recordError}`
+        : r.silencedByAndroid ? "Android silenced the mic during the call."
+        : loudest < 200 ? "The mic heard almost nothing."
+        : "The mic was working during the call.";
+      out.replaceChildren();
+      const line = (text) => { const p = document.createElement("p"); p.textContent = text; out.append(p); return p; };
+      line(verdict);
+      line(`Speaker on: ${r.speakerOn}. Speech played: ${!!r.speechStarted}. Silenced by Android: ${r.silencedByAndroid ?? "unknown"}.`);
+      line(`Loudest sound each second (0-32767): ${peaks.join(", ")}`);
+      if (r.wav) {
+        const player = document.createElement("audio");
+        player.controls = true;
+        player.style.width = "100%";
+        player.src = "data:audio/wav;base64," + r.wav;
+        out.append(player);
+        const heard = line("Transcribing what the mic heard…");
+        api("transcribe", { method: "POST", body: { audio: r.wav } })
+          .then((t) => { heard.textContent = `The mic heard: "${t.text.trim() || "(no words)"}"`; })
+          .catch((e) => { heard.textContent = `Couldn't transcribe it: ${e.message}`; });
+      }
+      line("Now ask the person: did they hear Jarvis clearly?");
+    } catch (e) {
+      out.textContent = e.message;
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function listenNative() {
     if (state === "listening") return;
     stopSpeaking();
@@ -740,6 +784,8 @@
     $("#auto-open").checked = settings.autoOpen;
     $("#auto-open").onchange = (e) => { settings.autoOpen = e.target.checked; saveSettings(); };
     $("#confirm-calls-row").hidden = !Native;
+    $("#call-test").hidden = !Native;
+    $("#call-test-start").onclick = runCallTest;
     $("#confirm-calls").checked = settings.confirmCalls;
     $("#confirm-calls").onchange = (e) => { settings.confirmCalls = e.target.checked; saveSettings(); };
     $("#speech-lang").value = settings.lang;

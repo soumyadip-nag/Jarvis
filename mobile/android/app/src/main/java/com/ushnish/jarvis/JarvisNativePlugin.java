@@ -12,6 +12,9 @@ import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import android.telecom.TelecomManager;
+
+import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -39,6 +42,7 @@ import java.util.UUID;
         @Permission(alias = "contacts", strings = { Manifest.permission.READ_CONTACTS }),
         @Permission(alias = "phone", strings = { Manifest.permission.CALL_PHONE }),
         @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO }),
+        @Permission(alias = "notifications", strings = { Manifest.permission.POST_NOTIFICATIONS }),
     }
 )
 public class JarvisNativePlugin extends Plugin {
@@ -153,6 +157,39 @@ public class JarvisNativePlugin extends Plugin {
             call.resolve();
         } catch (Exception e) {
             call.reject("Couldn't place the call: " + e.getMessage());
+        }
+    }
+
+    // ───────── call test ─────────
+
+    /** See CallTestService. Only ever started from the test button in Settings, for a number typed there. */
+    @PluginMethod
+    public void startCallTest(PluginCall call) {
+        requestPermissionForAliases(new String[] { "phone", "microphone", "notifications" }, call, "callTestPermissions");
+    }
+
+    @PermissionCallback
+    private void callTestPermissions(PluginCall call) {
+        if (getPermissionState("phone") != PermissionState.GRANTED || getPermissionState("microphone") != PermissionState.GRANTED) {
+            call.reject("The call test needs the Phone and Microphone permissions.");
+            return;
+        }
+        String number = call.getString("number", "");
+        if (number == null || number.isEmpty()) {
+            call.reject("No number given.");
+            return;
+        }
+        try {
+            CallTestService.finished = call::resolve;
+            Intent service = new Intent(getContext(), CallTestService.class).putExtra("message", call.getString("message", ""));
+            ContextCompat.startForegroundService(getContext(), service);
+
+            Intent dial = new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)));
+            dial.putExtra(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, true);
+            getActivity().startActivity(dial);
+        } catch (Exception e) {
+            CallTestService.finished = null;
+            call.reject("Couldn't start the call test: " + e.getMessage());
         }
     }
 
