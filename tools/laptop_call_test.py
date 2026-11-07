@@ -46,10 +46,10 @@ def find_call_devices():
     return pick(candidates["input"]), pick(candidates["output"])
 
 
-def load_message(rate):
-    """Renders the message and converts it to the device's sample rate."""
+def render_speech(text, rate):
+    """Renders speech in the Jarvis voice at the device's sample rate."""
     path = DATA_DIR / "laptop_call_message.mp3"
-    asyncio.run(edge_tts.Communicate(MESSAGE, ASSISTANT_VOICE, rate=VOICE_RATE, pitch=VOICE_PITCH).save(str(path)))
+    asyncio.run(edge_tts.Communicate(text, ASSISTANT_VOICE, rate=VOICE_RATE, pitch=VOICE_PITCH).save(str(path)))
     with AudioFile(str(path)) as f:
         audio, source_rate = f.read(f.frames).mean(axis=0), f.samplerate
     length = int(len(audio) * rate / source_rate)
@@ -68,23 +68,30 @@ def main():
 
     input("\nWith the call connected, press Enter and Jarvis will speak...")
     out_rate, mic_rate = int(out["default_samplerate"]), int(mic["default_samplerate"])
-    message = load_message(out_rate)
+    message = render_speech(MESSAGE, out_rate)
 
     # Record throughout, so it also shows whether Jarvis's own voice comes back.
     recorded, stop = [], threading.Event()
+    dropouts = [0]
 
     def on_audio(chunk, frames, time, status):
+        if status.input_overflow:
+            dropouts[0] += 1
         if not stop.is_set():
             recorded.append(chunk.copy())
 
-    with sd.InputStream(device=mic_index, samplerate=mic_rate, channels=1, dtype="float32", callback=on_audio):
+    # A big buffer, so a busy laptop is less likely to lose any of the other person's voice.
+    with sd.InputStream(device=mic_index, samplerate=mic_rate, channels=1, dtype="float32", callback=on_audio, latency="high"):
         print("Speaking...")
-        sd.play(message, out_rate, device=out_index, blocking=True)
+        sd.play(message, out_rate, device=out_index, blocking=True, latency="high")
         print(f"Listening for {LISTEN_SECONDS} seconds. Ask them to talk now.")
         sd.sleep(LISTEN_SECONDS * 1000)
         stop.set()
 
     audio = np.concatenate(recorded)[:, 0] if recorded else np.zeros(1, dtype=np.float32)
+    expected = len(message) / out_rate + LISTEN_SECONDS
+    print()
+    print(f"Recorded {len(audio) / mic_rate:.1f}s of at least {expected:.1f}s expected. Audio dropouts: {dropouts[0]}")
     seconds = [audio[i:i + mic_rate] for i in range(0, len(audio), mic_rate)]
     print("\nLoudest sound each second (0 to 1): " + ", ".join(f"{np.abs(s).max():.3f}" for s in seconds))
 
@@ -96,7 +103,7 @@ def main():
     if GROQ_API_KEY:
         with open(path, "rb") as f:
             text = Groq(api_key=GROQ_API_KEY).audio.transcriptions.create(
-                file=("call.wav", f.read()), model="whisper-large-v3-turbo"
+                file=("call.wav", f.read()), model="whisper-large-v3-turbo", language="en"
             ).text
         print(f'\nJarvis heard: "{text.strip() or "(no words)"}"')
     print("\nNow ask them: did they hear Jarvis clearly?")
