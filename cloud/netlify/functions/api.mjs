@@ -7,11 +7,13 @@
 //   GET    /api/memories           -> {memories}
 //   POST   /api/memories           {text}
 //   DELETE /api/memories/<id>
+//   GET    /api/images/<id>        -> image bytes
 //   DELETE /api/history            clears the on-screen conversation (archive and memory are kept)
 import { login, verify } from "../../lib/auth.mjs";
 import { respond } from "../../lib/brain.mjs";
 import { messagesSince, clearRecent } from "../../lib/messages.mjs";
 import { listMemories, addMemories, deleteMemory } from "../../lib/memory.mjs";
+import { getImage } from "../../lib/images.mjs";
 import { touch, pending, done, status } from "../../lib/devices.mjs";
 
 const json = (data, status = 200) =>
@@ -56,6 +58,14 @@ export default async (req, context) => {
     if (req.method === "POST" && parts[0] === "commands" && parts[2] === "done") {
       await done(device, parts[1]);
       return json({ ok: true });
+    }
+
+    if (req.method === "GET" && parts[0] === "images" && parts[1]) {
+      const image = await getImage(parts[1]);
+      if (!image) return json({ error: "Not found" }, 404);
+      return new Response(image.bytes, {
+        headers: { "Content-Type": image.mime, "Cache-Control": "private, max-age=86400" },
+      });
     }
 
     if (route === "GET /memories") return json({ memories: await listMemories() });

@@ -2,8 +2,8 @@
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const COHERE_EMBED_URL = "https://api.cohere.com/v2/embed";
 
-export const MODEL = () => process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
-export const FAST_MODEL = () => process.env.GROQ_FAST_MODEL || "llama-3.1-8b-instant";
+export const MODEL = () => process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+export const FAST_MODEL = () => process.env.GROQ_FAST_MODEL || "openai/gpt-oss-20b";
 
 export async function chat({ messages, tools, model = MODEL(), json = false, maxTokens = 1024, temperature = 0.6 }) {
   if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is not set on the server.");

@@ -22,9 +22,10 @@ conversation, one memory and can send commands to each other.
 | `GROQ_API_KEY` | ✅ | AI replies and tool use |
 | `CohereAPIKey` | recommended | Smarter memory recall (semantic search). Without it, keyword matching is used. |
 | `SERPAPI_KEY` | optional | Live web search (news, weather, scores…) |
+| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` | optional | Image generation (free daily allowance). The token needs the **Workers AI** permission. |
 | `USER_NAME` | optional | Your name, used in Jarvis's personality |
 | `HONORIFIC` | optional | `sir` (default), `ma'am`, … |
-| `GROQ_MODEL` | optional | Default `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | optional | Default `openai/gpt-oss-120b` |
 
 3. **Deploys → Trigger deploy** so the variables take effect.
 
@@ -56,6 +57,11 @@ The footer shows **● PHONE ONLINE** when both are connected.
 - **Cross-device commands:** "open Spotify on my laptop" (from the phone) runs on the laptop;
   "play lo-fi on my phone" (from the laptop) pops up on the phone. Commands wait up to 24 hours
   if the other device is offline.
+
+## Images
+
+Ask for a picture on either device. It appears in the phone chat (tap to save) and opens on the
+laptop. Images are stored privately and can only be fetched by a signed-in device.
 
 ## Phone actions
 

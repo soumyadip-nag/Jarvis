@@ -4,6 +4,7 @@ import { recall, addMemories, forgetMatching, extractAndStore } from "./memory.m
 import { addMessage, recentMessages, searchArchive } from "./messages.mjs";
 import { phoneActionToUrl } from "./actions.mjs";
 import { enqueue, isOnline } from "./devices.mjs";
+import { generateImages, imagesEnabled } from "./images.mjs";
 
 const NAME = () => process.env.ASSISTANT_NAME || "Jarvis";
 const USER = () => process.env.USER_NAME || "the user";
@@ -30,6 +31,7 @@ Devices and actions:
 - If they don't say which device, act on the one they are using (${device}).
 - After using a tool, confirm briefly ("Done, ${HONORIFIC()}.", "Opening YouTube."). Don't read out URLs.
 - You cannot set alarms or reminders yet; say so politely if asked.
+- When asked to create a picture, use generate_image. It appears in the chat by itself. Never claim an image was made if the tool reported an error.
 
 Current date and time for the user: ${now}.`;
 }
@@ -109,6 +111,23 @@ function tools() {
       },
     });
   }
+  if (imagesEnabled()) {
+    list.push({
+      type: "function",
+      function: {
+        name: "generate_image",
+        description: "Create a picture from a description. Write a detailed visual prompt in English.",
+        parameters: {
+          type: "object",
+          properties: {
+            prompt: { type: "string" },
+            count: { type: "integer", description: "How many images, 1 to 4. Use 1 unless the user asks for more." },
+          },
+          required: ["prompt"],
+        },
+      },
+    });
+  }
   return list;
 }
 
@@ -167,6 +186,11 @@ async function runTool(name, args, ctx) {
     case "search_history": {
       const hits = await searchArchive(args.query || "");
       return hits.length ? hits.join("\n") : "Nothing found in past conversations.";
+    }
+    case "generate_image": {
+      const ids = await generateImages(args.prompt || "", args.count);
+      for (const id of ids) ctx.actions.push({ type: "image", id, label: args.prompt });
+      return `Generated ${ids.length} image(s). They are already showing in the chat.`;
     }
     case "web_search":
       return await webSearch(args.query || "");

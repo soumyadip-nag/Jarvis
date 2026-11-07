@@ -18,6 +18,7 @@
   let token = store.get("token", null);
   let lastTs = 0;
   let busy = false;
+  let latestRequest = 0;
   let state = "booting";
   let lastActivity = Date.now();
   let syncTimer = null;
@@ -72,7 +73,32 @@
   const time = (ts) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const scrollDown = () => { chatEl().scrollTop = chatEl().scrollHeight; };
 
+  /** Images need the login token, so they are fetched by script rather than with a plain <img src>. */
+  function imageEl(a) {
+    const link = document.createElement("a");
+    link.className = "gen-image";
+    link.title = "Tap to save";
+    link.download = `jarvis-${a.id}.jpg`;
+    const img = document.createElement("img");
+    img.alt = a.label || "Generated image";
+    link.append(img);
+    fetch("/api/images/" + encodeURIComponent(a.id), { headers: { Authorization: "Bearer " + token } })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(blob);
+        img.onload = scrollDown;
+        img.src = url;
+        link.href = url;
+      })
+      .catch(() => { link.textContent = "Couldn't load this image."; });
+    return link;
+  }
+
   function actionEl(a) {
+    if (a.type === "image") return imageEl(a);
     if (a.type === "open_url" && !a.queued) {
       const link = document.createElement("a");
       link.className = "action";
@@ -222,6 +248,8 @@
     text = (text || "").trim();
     if (!text || busy) return;
     busy = true;
+    const request = ++latestRequest;
+    stopSpeaking();
     lastActivity = Date.now();
     $("#input").value = "";
     const local = renderMessage({ role: "user", content: text, device: DEVICE, ts: Date.now() });
@@ -240,8 +268,9 @@
       local?.classList.add("failed");
       systemMessage(e.message);
     } finally {
-      busy = false;
-      if (state !== "speaking") setState("idle", "Awaiting your command");
+      // Speaking can outlast this request: a newer message may already be in flight, so only the
+      // latest request may return the app to idle (and `busy` was already cleared above).
+      if (request === latestRequest && !busy && state !== "speaking") setState("idle", "Awaiting your command");
     }
   }
 

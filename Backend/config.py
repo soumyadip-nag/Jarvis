@@ -6,7 +6,7 @@ Never hardcode API keys in source files.
 from pathlib import Path
 import os
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 # Project root = folder that contains Main.py, regardless of the current working directory.
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -19,20 +19,26 @@ SPEECH_PATH = DATA_DIR / "speech.mp3"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Names
-USERNAME = os.getenv("Username", "Sir")
+# Read from .env directly: Windows always defines %USERNAME%, and environment variable names
+# are case-insensitive there, so os.getenv("Username") would return the login name instead.
+USERNAME = dotenv_values(ROOT_DIR / ".env").get("Username") or os.getenv("Username", "Sir")
 ASSISTANT_NAME = os.getenv("Assistantname", "Jarvis")
 HONORIFIC = os.getenv("Honorific", "sir")  # how Jarvis addresses you, e.g. "sir" or "ma'am"
 
 # API keys (only from the environment / .env)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-COHERE_API_KEY = os.getenv("CohereAPIKey")
 HUGGINGFACE_API_KEY = os.getenv("HuggingFaceAPIKey")
 
 # Model names (override in .env when providers retire models)
-GROQ_CHAT_MODEL = os.getenv("GROQ_CHAT_MODEL", "llama-3.3-70b-versatile")
+GROQ_CHAT_MODEL = os.getenv("GROQ_CHAT_MODEL", "openai/gpt-oss-120b")
 GROQ_CONTENT_MODEL = os.getenv("GROQ_CONTENT_MODEL", GROQ_CHAT_MODEL)
-COHERE_MODEL = os.getenv("COHERE_MODEL", "command-a-03-2025")
+GROQ_ROUTER_MODEL = os.getenv("GROQ_ROUTER_MODEL", "openai/gpt-oss-20b")
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "black-forest-labs/FLUX.1-schnell")
+
+# Image generation with Cloudflare Workers AI (free daily allowance)
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+CLOUDFLARE_IMAGE_MODEL = os.getenv("CLOUDFLARE_IMAGE_MODEL", "@cf/black-forest-labs/flux-1-schnell")
 
 # Voice: a calm British male voice, slightly slower and deeper than default.
 ASSISTANT_VOICE = os.getenv("AssistantVoice", "en-GB-RyanNeural")

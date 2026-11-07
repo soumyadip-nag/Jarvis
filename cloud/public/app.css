@@ -105,6 +105,8 @@ input:focus, select:focus { border-color: var(--accent); }
   border-radius: 12px; border: 1px solid rgba(41,208,255,.45); background: rgba(41,208,255,.12);
   color: var(--text); text-decoration: none; font-size: 13px;
 }
+.gen-image { display: block; margin-top: 8px; }
+.gen-image img { display: block; width: 100%; max-width: 420px; min-height: 80px; border-radius: 12px; border: 1px solid rgba(41,208,255,.3); }
 .action.queued { border-style: dashed; color: var(--muted); }
 .empty { margin: auto; text-align: center; color: var(--muted); font-size: 13px; padding: 20px; }
 

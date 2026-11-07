@@ -89,5 +89,24 @@ class CloudClient:
             self.last_ts = max(self.last_ts, m["ts"])
         return data
 
+    def download_image(self, image_id):
+        """Fetch a generated image's bytes (the download needs the same device token)."""
+        if not self.token:
+            self.login()
+        for attempt in (1, 2):
+            req = urllib.request.Request(f"{self.base}/api/images/{image_id}")
+            req.add_header("User-Agent", "JarvisDesktop/1.0")
+            req.add_header("Authorization", f"Bearer {self.token}")
+            try:
+                with urllib.request.urlopen(req, timeout=60) as res:
+                    return res.read()
+            except urllib.error.HTTPError as e:
+                if e.code == 401 and attempt == 1:
+                    self.login()
+                    continue
+                raise CloudError(f"Couldn't download the image (HTTP {e.code}).") from None
+            except urllib.error.URLError as e:
+                raise CloudError(f"Can't reach the Jarvis server ({e.reason}).") from None
+
     def done(self, command_id):
         self._request("POST", f"commands/{command_id}/done", {})

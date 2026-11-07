@@ -9,6 +9,8 @@ process.env.JARVIS_LOCAL_STORE = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-"
 process.env.JARVIS_PASSCODE = "correct horse battery staple";
 process.env.GROQ_API_KEY = "test";
 process.env.CohereAPIKey = "test";
+process.env.CLOUDFLARE_ACCOUNT_ID = "acct";
+process.env.CLOUDFLARE_API_TOKEN = "test";
 
 // ── mock LLM: decides tool calls from the last user message
 const realFetch = globalThis.fetch;
@@ -20,6 +22,10 @@ const seenPrompts = [];
 
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
+  if (String(url).includes("cloudflare")) {
+    if (body.prompt.includes("fail")) return new Response("nope", { status: 500 });
+    return new Response(JSON.stringify({ result: { image: Buffer.from("fake-jpeg").toString("base64") } }));
+  }
   if (String(url).includes("cohere")) {
     // crude deterministic "embedding": letter histogram
     const vec = (t) => Array.from({ length: 26 }, (_, i) => (t.toLowerCase().split(String.fromCharCode(97 + i)).length - 1));
@@ -34,6 +40,8 @@ globalThis.fetch = async (url, init) => {
   const last = body.messages.at(-1);
   if (last.role === "tool") return new Response(JSON.stringify(say(`Done, sir. (${last.content})`)));
   const text = last.content.toLowerCase();
+  if (text.includes("draw a broken")) return new Response(JSON.stringify(toolCall("generate_image", { prompt: "fail" })));
+  if (text.includes("draw")) return new Response(JSON.stringify(toolCall("generate_image", { prompt: "a lion", count: 2 })));
   if (text.includes("on my laptop")) return new Response(JSON.stringify(toolCall("laptop_command", { command: "open spotify" })));
   if (text.includes("open youtube")) return new Response(JSON.stringify(toolCall("phone_action", { action: "open_app", target: "YouTube" })));
   return new Response(JSON.stringify(say("Very good, sir.")));
@@ -108,6 +116,27 @@ test("memories can be added manually and deleted", async () => {
   const { data } = await call("POST", "memories", { token: phone, body: { text: "My bike is a Royal Enfield." } });
   const id = data.added[0].id;
   assert.equal((await call("DELETE", `memories/${id}`, { token: phone })).data.ok, true);
+});
+
+test("generated images appear as actions and are private", async () => {
+  const { data } = await call("POST", "chat", { token: phone, body: { text: "Draw a lion" } });
+  const images = data.actions.filter((a) => a.type === "image");
+  assert.equal(images.length, 2);
+
+  const url = `https://jarvis.test/api/images/${images[0].id}`;
+  assert.equal((await handler(new Request(url), ctx)).status, 401);
+  const res = await handler(new Request(url, { headers: { Authorization: `Bearer ${laptop}` } }), ctx);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "image/jpeg");
+  assert.equal(Buffer.from(await res.arrayBuffer()).toString(), "fake-jpeg");
+  const bad = new Request("https://jarvis.test/api/images/..%2Fauth", { headers: { Authorization: `Bearer ${laptop}` } });
+  assert.equal((await handler(bad, ctx)).status, 404);
+});
+
+test("a failed image is reported to the model, not faked", async () => {
+  const { data } = await call("POST", "chat", { token: phone, body: { text: "Draw a broken thing" } });
+  assert.equal(data.actions.length, 0);
+  assert.match(data.reply.content, /Tool error/);
 });
 
 test("brute force is locked out", async () => {

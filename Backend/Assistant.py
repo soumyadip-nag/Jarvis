@@ -35,7 +35,7 @@ def handle_query(query, on_status=lambda text: None):
             on_status(f"Rendering images: {prompt}")
             count = GenerateImages(prompt)
             replies.append(
-                f"I've rendered {count} images of {prompt}, {HONORIFIC}." if count
+                f"I've rendered {count} image{'' if count == 1 else 's'} of {prompt}, {HONORIFIC}." if count
                 else f"The image generator isn't cooperating, {HONORIFIC}."
             )
         elif task.startswith("reminder"):

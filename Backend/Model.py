@@ -1,9 +1,9 @@
-import cohere
+from groq import Groq
 from rich import print
 
-from Backend.config import COHERE_API_KEY, COHERE_MODEL, require_key
+from Backend.config import GROQ_API_KEY, GROQ_ROUTER_MODEL, require_key
 
-co = cohere.Client(api_key=require_key(COHERE_API_KEY, "CohereAPIKey"))
+client = Groq(api_key=require_key(GROQ_API_KEY, "GROQ_API_KEY"))
 
 funcs = [
     "exit", "general", "realtime", "open", "close", "play",
@@ -31,31 +31,29 @@ You will decide whether a query is a 'general' query, a 'realtime' query, or is 
 """
 
 ChatHistory = [
-    {"role": "User", "message": "how are you?"},
-    {"role": "Chatbot", "message": "general how are you?"},
-    {"role": "User", "message": "do you like pizza?"},
-    {"role": "Chatbot", "message": "general do you like pizza?"},
-    {"role": "User", "message": "open chrome and tell me what you know about mahatma gandhi."},
-    {"role": "Chatbot", "message": "open chrome, general tell me what you know about mahatma gandhi. ?"},
-    {"role": "User", "message": "open chrome, open firefox"},
-    {"role": "Chatbot", "message":"open chrome, open firefox"},
-    {"role": "User", "message": "what is today's date and by the way remind me that i have a dancing performance on 5th aug at 11 pm"},
-    {"role": "Chatbot", "message": "general what is today's date, reminder 11:00pm 5th aug dancing performance"},
-    {"role": "User", "message": "chat with me."},
-    {"role": "Chatbot", "message": "general chat with me."}
+    {"role": "user", "content": "how are you?"},
+    {"role": "assistant", "content": "general how are you?"},
+    {"role": "user", "content": "do you like pizza?"},
+    {"role": "assistant", "content": "general do you like pizza?"},
+    {"role": "user", "content": "open chrome and tell me what you know about mahatma gandhi."},
+    {"role": "assistant", "content": "open chrome, general tell me what you know about mahatma gandhi. ?"},
+    {"role": "user", "content": "open chrome, open firefox"},
+    {"role": "assistant", "content":"open chrome, open firefox"},
+    {"role": "user", "content": "what is today's date and by the way remind me that i have a dancing performance on 5th aug at 11 pm"},
+    {"role": "assistant", "content": "general what is today's date, reminder 11:00pm 5th aug dancing performance"},
+    {"role": "user", "content": "chat with me."},
+    {"role": "assistant", "content": "general chat with me."}
 ]
 
 def FirstLayerDMM(prompt: str = "test", retries: int = 2):
     """Classify a query into a list of tasks, e.g. ['open chrome', 'general who is he?']."""
     try:
-        response = co.chat(
-            model=COHERE_MODEL,
-            message=prompt,
-            temperature=0.7,
-            chat_history=ChatHistory,
-            prompt_truncation="OFF",
-            preamble=preamble,
-        ).text
+        response = client.chat.completions.create(
+            model=GROQ_ROUTER_MODEL,
+            messages=[{"role": "system", "content": preamble}, *ChatHistory, {"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=1024,
+        ).choices[0].message.content or ""
     except Exception as e:
         print(f"Decision model error: {e}")
         # Fall back to a normal chat answer so the assistant still responds.

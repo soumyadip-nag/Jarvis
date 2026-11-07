@@ -1,8 +1,8 @@
 python-dotenv
 groq
-cohere
 rich
 requests
+huggingface_hub
 pillow
 googlesearch-python
 edge-tts

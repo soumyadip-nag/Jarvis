@@ -3,6 +3,7 @@ import asyncio
 import re
 
 from Backend.CloudSync import CloudClient, CloudError
+from Backend.config import DATA_DIR
 from Backend.Personality import FAREWELLS, pick
 
 _client = None
@@ -19,6 +20,15 @@ def run_laptop_command(command):
     """Execute a command like 'open spotify' / 'system volume up' with the existing automation code."""
     from Backend.Automation import Automation
     return asyncio.run(Automation([command]))
+
+
+def show_image(image_id):
+    """Download an image the cloud generated, save it in Data and open it."""
+    from Backend.ImageGeneration import open_images
+
+    path = DATA_DIR / f"jarvis_{image_id}.jpg"
+    path.write_bytes(client().download_image(image_id))
+    open_images([path])
 
 
 def handle_query(query, on_status=lambda text: None):
@@ -39,4 +49,10 @@ def handle_query(query, on_status=lambda text: None):
                 run_laptop_command(action["command"])
             except Exception as e:
                 print(f"Laptop command failed: {e}")
+        elif action.get("type") == "image":
+            on_status("Opening image")
+            try:
+                show_image(action["id"])
+            except Exception as e:
+                print(f"Couldn't open image: {e}")
     return data["reply"]["content"], False
