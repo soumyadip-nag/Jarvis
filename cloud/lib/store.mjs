@@ -20,22 +20,24 @@ function fileStore(dir) {
   };
 }
 
-let cached;
-/** The whole store, for what isn't anyone's own data, such as login attempts. */
+let localStore;
+/**
+ * The whole store, for what isn't anyone's own data, such as login attempts.
+ * Netlify's connection is rebuilt each time: its token only lasts for the request, but a server can stay up for
+ * many requests, so keeping one would fail everything with "Token expired" once it ran out.
+ */
 export function globalStore() {
-  if (cached) return cached;
   if (process.env.JARVIS_LOCAL_STORE) {
-    cached = fileStore(process.env.JARVIS_LOCAL_STORE);
-  } else {
-    const blobs = getStore({ name: "jarvis", consistency: "strong" });
-    cached = {
-      get: (key) => blobs.get(key, { type: "json" }),
-      setJSON: (key, value) => blobs.setJSON(key, value),
-      delete: (key) => blobs.delete(key),
-      list: (opts) => blobs.list(opts),
-    };
+    localStore ||= fileStore(process.env.JARVIS_LOCAL_STORE);
+    return localStore;
   }
-  return cached;
+  const blobs = getStore({ name: "jarvis", consistency: "strong" });
+  return {
+    get: (key) => blobs.get(key, { type: "json" }),
+    setJSON: (key, value) => blobs.setJSON(key, value),
+    delete: (key) => blobs.delete(key),
+    list: (opts) => blobs.list(opts),
+  };
 }
 
 /** One person's space. The owner's data stays at the top level; everyone else's is under users/<id>/. */
