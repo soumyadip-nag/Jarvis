@@ -1,13 +1,16 @@
 """Text to speech with a J.A.R.V.I.S.-style voice.
 
 1. edge-tts renders a calm British voice (en-GB-RyanNeural by default).
-2. If `pedalboard` is installed and VOICE_FX is on, a subtle effects chain is applied:
+2. If `pedalboard` is installed and VOICE_FX is on, a subtle effects chain is applied (see VoiceFx.py):
    low-cut, gentle compression, a touch of chorus and a very short room reverb.
    That faint "processed" quality is a big part of the movie-AI feel.
 3. pygame plays the result. Playback can be interrupted via the `func` callback.
 """
 import asyncio
 import re
+import subprocess
+import sys
+from pathlib import Path
 
 import edge_tts
 import pygame
@@ -17,23 +20,8 @@ from Backend.config import (
 )
 from Backend.Personality import MORE_ON_SCREEN, pick
 
-try:
-    from pedalboard import (
-        Pedalboard, HighpassFilter, LowShelfFilter, HighShelfFilter, Compressor, Chorus, Reverb, Gain,
-    )
-    from pedalboard.io import AudioFile
-
-    VOICE_BOARD = Pedalboard([
-        HighpassFilter(cutoff_frequency_hz=90),
-        LowShelfFilter(cutoff_frequency_hz=220, gain_db=2.0),      # a little more chest
-        HighShelfFilter(cutoff_frequency_hz=6500, gain_db=2.5),     # crisp, "digital" air
-        Compressor(threshold_db=-20, ratio=3, attack_ms=5, release_ms=120),
-        Chorus(rate_hz=0.35, depth=0.12, centre_delay_ms=7.0, feedback=0.0, mix=0.12),
-        Reverb(room_size=0.12, damping=0.6, wet_level=0.07, dry_level=0.95, width=0.6),
-        Gain(gain_db=1.0),
-    ])
-except Exception:  # pedalboard is optional
-    VOICE_BOARD = None
+FX_SCRIPT = Path(__file__).with_name("VoiceFx.py")
+FX_TIMEOUT_SECONDS = 8
 
 
 async def TextToAudioFile(text) -> None:
@@ -42,20 +30,24 @@ async def TextToAudioFile(text) -> None:
 
 
 def apply_voice_fx(src=SPEECH_PATH, dst=SPEECH_FX_PATH):
-    """Apply the effects chain. Returns the file to play (original if FX unavailable)."""
-    if not (VOICE_FX and VOICE_BOARD):
+    """Apply the effects in their own process, so they can't crash or freeze the app.
+
+    Returns the file to play: the plain voice if the effects fail or take too long.
+    """
+    if not VOICE_FX:
         return src
     try:
-        with AudioFile(str(src)) as f:
-            audio = f.read(f.frames)
-            samplerate = f.samplerate
-        processed = VOICE_BOARD(audio, samplerate)
-        with AudioFile(str(dst), "w", samplerate, processed.shape[0]) as f:
-            f.write(processed)
+        subprocess.run(
+            [sys.executable, str(FX_SCRIPT), str(src), str(dst)],
+            check=True, capture_output=True, text=True, timeout=FX_TIMEOUT_SECONDS,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
         return dst
-    except Exception as e:
+    except subprocess.CalledProcessError as e:
+        print(f"Voice FX skipped: {e.stderr.strip()[-300:]}")
+    except (OSError, subprocess.TimeoutExpired) as e:
         print(f"Voice FX skipped: {e}")
-        return src
+    return src
 
 
 def _release_mixer():
