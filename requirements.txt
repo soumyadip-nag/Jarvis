@@ -1,0 +1,16 @@
+python-dotenv
+groq
+cohere
+rich
+requests
+pillow
+googlesearch-python
+edge-tts
+pygame
+SpeechRecognition
+PyAudio
+PyQt5
+# Windows desktop automation
+AppOpener
+pywhatkit
+keyboard

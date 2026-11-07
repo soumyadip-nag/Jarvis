@@ -1,19 +1,14 @@
 import cohere
 from rich import print
-from dotenv import dotenv_values
 
-env_vars =  dotenv_values(".env")
+from Backend.config import COHERE_API_KEY, COHERE_MODEL, require_key
 
-CohereAPIKey = "XeWpoAaktlAAUNkvTYkmp6BVGFV6dsSdOUcTY6Og"
-
-co = cohere.Client(api_key=CohereAPIKey)
+co = cohere.Client(api_key=require_key(COHERE_API_KEY, "CohereAPIKey"))
 
 funcs = [
     "exit", "general", "realtime", "open", "close", "play",
     "generate image", "system", "content", "google search", "youtube search", "reminder"
 ]
-
-messages = []
 
 preamble = """
 You are a very accurate Decision-Making Model, which decides what kind of a query is given to you.
@@ -50,43 +45,31 @@ ChatHistory = [
     {"role": "Chatbot", "message": "general chat with me."}
 ]
 
-def FirstLayerDMM(prompt: str = "test"):
-    
-    messages.append({"role": "user", "content": f"{prompt}"})
-    
-    stream = co.chat_stream(
-        model = 'command-r-plus',
-        message= prompt,
-        temperature=0.7,
-        chat_history=ChatHistory,
-        prompt_truncation='OFF',
-        connectors=[],
-        preamble=preamble
-    )
-  
-    response = ""
-    for event in stream:
-        if event.event_type == "text-generation":
-            response +=  event.text
-    response = response.replace("\n", "")
-    response = response.split(",")
-    
-    response = [i.strip() for i in response]
-    
-    temp = []
-    
-    for task in response:
-        for func in funcs:
-            if task.startswith(func):
-                temp.append(task)
-    
-    response =  temp
-    
-    if "(query)" in response:
-        newresponse = FirstLayerDMM(prompt=prompt)
-        return newresponse
-    else:
-        return response
+def FirstLayerDMM(prompt: str = "test", retries: int = 2):
+    """Classify a query into a list of tasks, e.g. ['open chrome', 'general who is he?']."""
+    try:
+        response = co.chat(
+            model=COHERE_MODEL,
+            message=prompt,
+            temperature=0.7,
+            chat_history=ChatHistory,
+            prompt_truncation="OFF",
+            preamble=preamble,
+        ).text
+    except Exception as e:
+        print(f"Decision model error: {e}")
+        # Fall back to a normal chat answer so the assistant still responds.
+        return [f"general {prompt}"]
+
+    tasks = [t.strip() for t in response.replace("\n", "").split(",")]
+    tasks = [t for t in tasks if any(t.startswith(func) for func in funcs)]
+
+    # The model sometimes echoes the placeholder "(query)" literally; ask again.
+    if any("(query)" in t for t in tasks) and retries > 0:
+        return FirstLayerDMM(prompt, retries - 1)
+
+    return tasks or [f"general {prompt}"]
+
 
 if __name__ == "__main__":
     while True:

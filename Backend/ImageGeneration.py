@@ -1,104 +1,68 @@
 import asyncio
+import re
 from random import randint
-from PIL import Image
-import requests
-import os
 from time import sleep
-from dotenv import get_key
-from dotenv import load_dotenv
-load_dotenv()
-api_key = os.getenv("HuggingFaceAPIKey")
 
-def open_images(prompt):
-    folder_path = r"Data"
-    prompt = prompt.replace(" ", "_")
-    Files = {f"{prompt}{i}.jpg" for i in range(1, 5)}
+import requests
+from PIL import Image
 
-    for jpg_file in Files:
-        image_path = os.path.join(folder_path, jpg_file)
-        try:
-            img = Image.open(image_path)  # Fixed incorrect syntax
-            print(f"Opening image: {image_path}")
-            img.show()
-            sleep(1)
-            os.remove(image_path)
-            print(f"Deleted image: {image_path}")
-        except FileNotFoundError:  # Handle specific error for better debugging
-            print(f"Unable to open image: {image_path}")
-        except Exception as e:
-            print(f"Unexpected error opening image: {e}")
+from Backend.config import DATA_DIR, HUGGINGFACE_API_KEY, IMAGE_MODEL
+
+API_URL = f"https://router.huggingface.co/hf-inference/models/{IMAGE_MODEL}"
 
 
-API_URL = "https://api-inference.huggingface.co/models/XLabs-AI/flux-RealismLora"
-headers = {"Authorization": f"Bearer {api_key}"}
+def _safe_name(prompt):
+    return re.sub(r"[^a-zA-Z0-9]+", "_", prompt).strip("_")[:60] or "image"
+
+
+def _headers():
+    if not HUGGINGFACE_API_KEY:
+        raise RuntimeError("HuggingFaceAPIKey is not set. Add it to the .env file (see .env.example).")
+    return {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
 
 
 async def query(payload):
     try:
-        response = await asyncio.to_thread(requests.post, API_URL, headers=headers, json=payload)
-        if response.status_code == 200:
-            return response.content  # Assuming the API returns raw image bytes
-        else:
-            print(f"API Error: {response.status_code}, {response.text}")
-            return None
+        response = await asyncio.to_thread(requests.post, API_URL, headers=_headers(), json=payload, timeout=120)
+        if response.status_code == 200 and response.headers.get("content-type", "").startswith("image/"):
+            return response.content
+        print(f"Image API error: {response.status_code}, {response.text[:300]}")
     except Exception as e:
-        print(f"Error during API call: {e}")
-        return None
+        print(f"Error during image API call: {e}")
+    return None
 
 
-async def generate_images(prompt: str):
-    folder_path = r"Data"
-    os.makedirs(folder_path, exist_ok=True)  # Ensure the folder exists
-
-    tasks = []
-    for i in range(4):
-        payload = {
-            "inputs": f"{prompt}, quality=4k, sharpness-maximum, Ultra High details high resolution, seed = {randint(0, 1000000)}",
-        }
-        task = asyncio.create_task(query(payload))
-        tasks.append(task)
-
+async def generate_images(prompt: str, count: int = 4):
+    tasks = [
+        query({"inputs": f"{prompt}, ultra high detail, high resolution, seed={randint(0, 1_000_000)}"})
+        for _ in range(count)
+    ]
     image_bytes_list = await asyncio.gather(*tasks)
 
-    for i, image_bytes in enumerate(image_bytes_list):
+    paths = []
+    for i, image_bytes in enumerate(image_bytes_list, start=1):
         if image_bytes:
-            with open(os.path.join(folder_path, f"{prompt.replace(' ', '_')}{i + 1}.jpg"), "wb") as f:
-                f.write(image_bytes)
+            path = DATA_DIR / f"{_safe_name(prompt)}{i}.jpg"
+            path.write_bytes(image_bytes)
+            paths.append(path)
+    return paths
+
+
+def open_images(paths):
+    for path in paths:
+        try:
+            Image.open(path).show()
+            sleep(1)
+        except Exception as e:
+            print(f"Unable to open image {path}: {e}")
 
 
 def GenerateImages(prompt: str):
-    asyncio.run(generate_images(prompt))
-    open_images(prompt)
+    """Generate images for a prompt and open them. Returns the number of images created."""
+    paths = asyncio.run(generate_images(prompt))
+    open_images(paths)
+    return len(paths)
 
 
-while True:
-    try:
-        with open(r"Frontend\Files\ImageGeneration.data", "r") as f:
-            Data: str = f.read().strip()  # Strip any extra whitespace
-
-        # Split the file content and ensure it has exactly 2 lines
-        lines = Data.split("\n")
-        if len(lines) != 2:
-            raise ValueError("Expected exactly two lines in ImageGeneration.data")
-
-        Prompt, Status = lines
-        Status = Status.strip()
-
-        if Status == "True":
-            print("Generating Images ...")
-            GenerateImages(prompt=Prompt.strip())
-
-            with open(r"Frontend\Files\ImageGeneration.data", "w") as f:
-                f.write(f"{Prompt}\nFalse")
-            break  # Exit loop after successful generation
-        else:
-            sleep(1)
-    except FileNotFoundError:
-        print("ImageGeneration.data file not found. Retrying...")
-        sleep(1)
-    except ValueError as ve:
-        print(f"Invalid data format in ImageGeneration.data: {ve}. Retrying...")
-        sleep(1)
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        sleep(1)
+if __name__ == "__main__":
+    print(GenerateImages(input("Image prompt: ")))

@@ -1,214 +1,211 @@
-from AppOpener import close, open as appopen
 from webbrowser import open as webopen
-from pywhatkit import search, playonyt
-from dotenv import dotenv_values
-from bs4 import BeautifulSoup
-from rich import print
-from groq import Groq
-import webbrowser
-import subprocess
-import requests
-import keyboard
-import os
+from urllib.parse import quote_plus
 import asyncio
-env_vars = dotenv_values(".env")
-GroqAPIKey = "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"
-Username = "Ushnish Chowdhury"
-classes = ["zCubwf", "hgKElc", "LTKOO sY7ric", "Z0lcW", "gsrt vk_bk FzWsb YwPhnf", "pclqee", "tw-Data-text tw-text-small tw-ta",
-           "IZ6rdc", "O5uR6d LTKOO", "vlzY6d", "webanswers-webanswers_table_webanswers-table", "dDoNo ikb4Bb gsrt", "sXLaOe",
-           "LWkfKe", "VQF4g", "qv3Wpe", "kno-rdesc", "SPZz6b"]
+import os
+import re
+import subprocess
+import sys
 
-useragent = "Mozilla/5.0(Windows NT 10.0; Win64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.142.86 Safari/537.36"
+from groq import Groq
+from rich import print
 
-client = Groq(api_key=GroqAPIKey)
+from Backend.config import USERNAME, DATA_DIR, GROQ_API_KEY, GROQ_CONTENT_MODEL, require_key
 
-professional_responses = [
-    "Your satisfaction is my top priority; feel free to reach out if there's anything else I can help you with.",
-    "I'm at your service for my additional questions or support you may need-don't hesitate to ask."
-]
+# Windows-only / desktop-only libraries are optional so the module still imports elsewhere.
+try:
+    from AppOpener import close as appclose, open as appopen
+except Exception:  # pragma: no cover - depends on OS
+    appclose = appopen = None
 
-messages = []
+try:
+    import keyboard
+except Exception:  # pragma: no cover - depends on OS / permissions
+    keyboard = None
 
-SystemChatBot = [{"role": "system", "content": f"Hello, I am {os.environ['Username']}, You're a content writer. You have to write content like letters,codes,applications,essays,notes, songs,poems etc."}]
+try:
+    from pywhatkit import search as pywhatkit_search, playonyt
+except Exception:  # pywhatkit needs an internet connection on import
+    pywhatkit_search = playonyt = None
+
+client = Groq(api_key=require_key(GROQ_API_KEY, "GROQ_API_KEY"))
+
+SystemChatBot = [{
+    "role": "system",
+    "content": f"Hello, I am {USERNAME}. You're a content writer. You have to write content like letters, codes, applications, essays, notes, songs, poems etc.",
+}]
+
+# Websites to try when an app name isn't an installed application.
+KNOWN_SITES = {
+    "youtube": "https://www.youtube.com",
+    "facebook": "https://www.facebook.com",
+    "instagram": "https://www.instagram.com",
+    "gmail": "https://mail.google.com",
+    "google": "https://www.google.com",
+    "twitter": "https://x.com",
+    "x": "https://x.com",
+    "linkedin": "https://www.linkedin.com",
+    "github": "https://github.com",
+    "chatgpt": "https://chatgpt.com",
+    "netflix": "https://www.netflix.com",
+    "whatsapp": "https://web.whatsapp.com",
+}
+
+
+def open_file(path):
+    """Open a file with the default program on any OS."""
+    if sys.platform.startswith("win"):
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+    else:
+        subprocess.Popen(["xdg-open", str(path)])
+
 
 def GoogleSearch(Topic):
-    search(Topic)
+    webopen(f"https://www.google.com/search?q={quote_plus(Topic)}")
     return True
 
+
+def YouTubeSearch(Topic):
+    webopen(f"https://www.youtube.com/results?search_query={quote_plus(Topic)}")
+    return True
+
+
+def PlayYoutube(query):
+    if playonyt is not None:
+        try:
+            playonyt(query)
+            return True
+        except Exception as e:
+            print(f"playonyt failed: {e}")
+    return YouTubeSearch(query)
+
+
 def Content(Topic):
-    
-    def OpenNotepad(File):
-        default_text_editor = 'notepad.exe'
-        subprocess.Popen([default_text_editor. File])
-        
     def ContentWriterAI(prompt):
-        messages.append({"role": "user", "content": f"{prompt}"})
-        
         completion = client.chat.completions.create(
-            model="mixtral-8x7B-32768",
-            messages = SystemChatBot + messages,
+            model=GROQ_CONTENT_MODEL,
+            messages=SystemChatBot + [{"role": "user", "content": prompt}],
             max_tokens=2048,
             temperature=0.7,
             top_p=1,
             stream=True,
-            stop=None
         )
         Answer = ""
-        
         for chunk in completion:
-            if chunk.choices[0].delta.content:
+            if chunk.choices and chunk.choices[0].delta.content:
                 Answer += chunk.choices[0].delta.content
-            
-        Answer = Answer.replace("</s", "")
-        messages.append({"role": "assistant", "content": Answer})
-        return Answer
-    
-    Topic: str = Topic.replace("Content ", "")
-    ContentByAI = ContentWriterAI(Topic)
-    
-    with open(rf"Data\{Topic.lower().replace(' ', '')}.txt", "w", encoding="utf-8") as file:
-        file.write(ContentByAI)
-        file.close()
-        
-    OpenNotepad(rf"Data\{Topic.lower().replace(' ','')}.txt")
-    return True
+        return Answer.replace("</s>", "")
 
-def YouTubeSearch(Topic):
-    Url4Search = f"https://www.youtube.com/results?search_query=[Topic]"
-    webbrowser.open(Url4Search)
-    return True
-
-def PlayYoutube(query):
-    playonyt(query)
-    return True
-
-def OpenApp(app, sess=requests.session()):
-    
+    Topic = re.sub(r"^content\s+", "", Topic.strip(), flags=re.IGNORECASE)
     try:
-        appopen(app, match_closest=True, output=True, throw_error=True)
-        return True
-    except:
-        def extract_links(html):
-            if html is None:
-                return[]
-            soup = BeautifulSoup(html, 'html.parser')
-            links = soup.find_all('a', {'jsname': 'UWckNb'})
-            return [link.get('href') for link in links]
-        
-        def search_google(query):
-            url = "https://www.google.com/search?q={query}"
-            headers = {"User-Agent": useragent}
-            response = sess.get(url, headers=headers)
-            
-            if response.status_code==200:
-                return response.text
-            else:
-                print("Failed to retrieve search results.")
-            return None
-        
-        html = search_google(app)
-        
-        if html:
-            link = extract_links(html)[0]
-            webopen(link)
-        return True
-    
-def CloseApp(app):
-    
-    if "chrome" in app:
-        pass
-    else:
+        text = ContentWriterAI(Topic)
+    except Exception as e:
+        print(f"Content writer error: {e}")
+        return False
+
+    # Safe file name: letters, numbers, underscores only.
+    filename = re.sub(r"[^a-z0-9]+", "_", Topic.lower()).strip("_")[:60] or "content"
+    path = DATA_DIR / f"{filename}.txt"
+    path.write_text(text, encoding="utf-8")
+    open_file(path)
+    return True
+
+
+def OpenApp(app):
+    app = app.strip()
+    if appopen is not None:
         try:
-            close(app, match_closest=True, output=True, throw_error=True)
+            appopen(app, match_closest=True, output=True, throw_error=True)
             return True
-        except:
-            return False
-        
+        except Exception:
+            pass
+
+    # Not an installed app: open the website instead.
+    url = KNOWN_SITES.get(app.lower())
+    if url is None:
+        url = f"https://www.google.com/search?q={quote_plus(app)}&btnI=1"  # "I'm feeling lucky"
+    webopen(url)
+    return True
+
+
+def CloseApp(app):
+    if appclose is None:
+        print("Closing apps is only supported on Windows (AppOpener).")
+        return False
+    try:
+        appclose(app.strip(), match_closest=True, output=True, throw_error=True)
+        return True
+    except Exception as e:
+        print(f"Could not close {app}: {e}")
+        return False
+
+
 def System(command):
-    
-    def mute():
+    if keyboard is None:
+        print("System controls need the 'keyboard' package (Windows).")
+        return False
+
+    command = command.strip().lower()
+    if command in ("mute", "unmute"):
+        # Windows has a single mute *toggle* key.
         keyboard.press_and_release("volume mute")
-        
-    def unmute():
-        keyboard.press_and_release("volume unmute")
-        
-    def volume_up():
-        keyboard.press_and_release("volume up")
-    
-    def volume_down():
-        keyboard.press_and_release("volume down")
-        
-    if command == "mute":
-        mute()
-    elif command == "unmute":
-        unmute()
     elif command == "volume up":
-        volume_up()
+        for _ in range(5):  # one key press is only 2%
+            keyboard.press_and_release("volume up")
     elif command == "volume down":
-        volume_down()
-        
+        for _ in range(5):
+            keyboard.press_and_release("volume down")
+    else:
+        print(f"Unknown system command: {command}")
+        return False
     return True
-                
+
+
 async def TranslateAndExecute(commands: list[str]):
-    
     funcs = []
-    
+
     for command in commands:
-        
-        if command.startswith("open "):
-            
-            if "open it" in command:
-                pass
-            if"open file" in command:
-                pass
-            else:
-                fun = asyncio.to_thread(OpenApp, command.removeprefix("open "))
-                funcs.append(fun)
-                
-        elif command.startswith("general "):
-            pass
-        
-        elif command.startswith("realtime "):
-            pass
-        
-        elif command.startswith("close "):
-            fun = asyncio.to_thread(CloseApp, command.removeprefix("close "))
-            funcs.append(fun)
-            
-        elif command.startswith("play "):
-            fun = asyncio.to_thread(PlayYoutube, command.removeprefix("play "))
-            funcs.append(fun)
-        
-        elif command.startswith("content "):
-            fun = asyncio.to_thread(Content, command.removeprefix("content "))
-            funcs.append(fun)
-            
-        elif command.startswith("google search "):
-            fun = asyncio.to_thread(GoogleSearch, command.removeprefix("google search "))
-            funcs.append(fun)
-        
-        elif command.startswith("youtube search "):
-            fun = asyncio.to_thread(YouTubeSearch, command.removeprefix("youtube search "))
-            funcs.append(fun)
-            
-        elif command.startswith("system "):
-            fun = asyncio.to_thread(System, command.removeprefix("system "))
-            funcs.append(fun)
-                            
+        command = command.strip()
+        lower = command.lower()
+
+        if lower.startswith("open "):
+            target = command[5:]
+            if target.lower() in ("it", "file"):
+                continue
+            funcs.append(asyncio.to_thread(OpenApp, target))
+        elif lower.startswith(("general ", "realtime ", "generate image", "reminder", "exit")):
+            continue  # handled in Main.py
+        elif lower.startswith("close "):
+            funcs.append(asyncio.to_thread(CloseApp, command[6:]))
+        elif lower.startswith("play "):
+            funcs.append(asyncio.to_thread(PlayYoutube, command[5:]))
+        elif lower.startswith("content "):
+            funcs.append(asyncio.to_thread(Content, command[8:]))
+        elif lower.startswith("google search "):
+            funcs.append(asyncio.to_thread(GoogleSearch, command[14:]))
+        elif lower.startswith("youtube search "):
+            funcs.append(asyncio.to_thread(YouTubeSearch, command[15:]))
+        elif lower.startswith("system "):
+            funcs.append(asyncio.to_thread(System, command[7:]))
         else:
-            print(f"No Function Found For {command}") 
-            
-    results = await asyncio.gather(*funcs)
-    
+            print(f"No function found for: {command}")
+
+    results = await asyncio.gather(*funcs, return_exceptions=True)
     for result in results:
-        if isinstance(result,str):
-            yield result
-        else:
-            yield result
-            
+        if isinstance(result, Exception):
+            print(f"Automation error: {result}")
+        yield result
+
+
 async def Automation(commands: list[str]):
-    
+    """Run all automation commands; returns True only if every one succeeded."""
+    ok = True
     async for result in TranslateAndExecute(commands):
-        pass
-    
-    return True
+        if result is not True:
+            ok = False
+    return ok
+
+
+if __name__ == "__main__":
+    print(asyncio.run(Automation([input("Command (e.g. 'open notepad'): ")])))

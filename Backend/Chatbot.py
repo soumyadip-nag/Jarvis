@@ -1,102 +1,58 @@
 from groq import Groq
-from json import load, dump
 import datetime
-from dotenv import dotenv_values
-import json
-env_vars = dotenv_values(".env")
 
-Username = "Ushnish Chowdhury and Soumyadip Nag"
-Assistantname = "Jarvis"
-GroqAPIKey = "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"
+from Backend.config import USERNAME, ASSISTANT_NAME, GROQ_API_KEY, GROQ_CHAT_MODEL, require_key
+from Backend.ChatLog import load_chatlog, save_chatlog, recent, clean_answer
 
-client = Groq(api_key=GroqAPIKey)
+client = Groq(api_key=require_key(GROQ_API_KEY, "GROQ_API_KEY"))
 
-messages = []
-
-System = f"""Hello, We are {Username}, You are a very accurate and advanced AI chatbot named {Assistantname} which also has real-time up-to-date information from the internet.
+System = f"""Hello, I am {USERNAME}. You are a very accurate and advanced AI assistant named {ASSISTANT_NAME} which also has real-time up-to-date information from the internet.
 *** Do not tell time until I ask, do not talk too much, just answer the question.***
 *** Reply in only English, even if the question is in Hindi, reply in English.***
 *** Do not provide notes in the output, just answer the question and never mention your training data. ***
 """
 
-SystemChatBot = [
-    {"role": "system", "content": System}
-]
+SystemChatBot = [{"role": "system", "content": System}]
 
-try:
-    with open(r"Data\ChatLog.json", "r") as f:
-        content = f.read()
-        messages = json.loads(content)  # Try loading it manually
-except json.JSONDecodeError:
-    print("Error: JSON format is incorrect. Re-initializing chat log.")
-    messages = []
-except FileNotFoundError:
-    with open(r"Data\ChatLog.json", "w") as f:
-        dump([], f)
-        
+
 def RealtimeInformation():
-    current_date_time = datetime.datetime.now()
-    day =  current_date_time.strftime("%A")
-    date = current_date_time.strftime("%d")
-    month = current_date_time.strftime("%B")
-    year  = current_date_time.strftime("%Y")
-    hour = current_date_time.strftime("%H")
-    minute = current_date_time.strftime("%M")
-    second = current_date_time.strftime("%S")
-    
-    data =  f"Please use this real-time information if needed,\n"
-    data += f"Day: {day}\nDate: {date}\nMonth: {month}\nYear: {year}\n"
-    data += f"Time: {hour} hours:{minute} minutes: {second} seconds.\n"
-    return data
+    now = datetime.datetime.now()
+    return (
+        "Please use this real-time information if needed,\n"
+        f"Day: {now:%A}\nDate: {now:%d}\nMonth: {now:%B}\nYear: {now:%Y}\n"
+        f"Time: {now:%H} hours:{now:%M} minutes: {now:%S} seconds.\n"
+    )
 
-def AnswerModifier(Answer):
-    lines = Answer.split('\n')
-    non_empty_lines = [line for line in lines if line.strip()]
-    modified_answer = '\n'.join(non_empty_lines)
-    return modified_answer
 
 def ChatBot(Query):
-    """This function sends the user's query to the chatbot and returns the AI's response."""
+    """Send the user's query to the chatbot and return the AI's response."""
+    messages = load_chatlog()
+    messages.append({"role": "user", "content": Query})
+
     try:
-        with open(r"Data\ChatLog.json", "r") as f:
-            try:
-                messages = json.load(f)
-            except json.JSONDecodeError:
-                print("Error: JSON format is incorrect. Re-initializing chat log.")
-                messages = []
-            
-        messages.append({"role": "user", "content": f"{Query}"})
-        
         completion = client.chat.completions.create(
-            model = "llama3-70b-8192",
-            messages = SystemChatBot + [{"role": "system", "content": RealtimeInformation()}] + messages,
-            max_tokens= 1024,
+            model=GROQ_CHAT_MODEL,
+            messages=SystemChatBot + [{"role": "system", "content": RealtimeInformation()}] + recent(messages),
+            max_tokens=1024,
             temperature=0.7,
             top_p=1,
             stream=True,
-            stop = None
         )
         Answer = ""
-        
         for chunk in completion:
-            if chunk.choices[0].delta.content:
+            if chunk.choices and chunk.choices[0].delta.content:
                 Answer += chunk.choices[0].delta.content
-            
-        Answer = Answer.replace("</s", "")
-        messages.append({"role": "assistant", "content": Answer})
-        
-        with open(r"Data\ChatLog.json", "w") as f:
-            dump(messages,f,indent=4)
-            
-        return AnswerModifier(Answer=Answer)
     except Exception as e:
-        print(f"Error: {e}")
-        with open(r"Data\ChatLog.json", "w") as f:
-            dump([],f,indent=4)
-        return ChatBot(Query)
-    
-    
+        # Keep the history intact and tell the user instead of retrying forever.
+        print(f"ChatBot error: {e}")
+        return "Sorry, I couldn't reach my language model right now. Please check the internet connection and API key."
+
+    Answer = clean_answer(Answer)
+    messages.append({"role": "assistant", "content": Answer})
+    save_chatlog(messages)
+    return Answer
+
+
 if __name__ == "__main__":
     while True:
-        user_input = input("Enter Your Question: ")
-        print(ChatBot(user_input))
+        print(ChatBot(input("Enter Your Question: ")))

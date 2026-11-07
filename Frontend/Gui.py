@@ -8,10 +8,11 @@ import os
 env_vars = dotenv_values(".env")
 Assistantname = "Jarvis"
 
-current_dir = os.getcwd()
+current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 old_chat_message = ""
-TempDirPath = rf"{current_dir}\Frontend\Files"
-GraphicsDirPath = rf"{current_dir}\Frontend\Graphics"
+TempDirPath = os.path.join(current_dir, "Frontend", "Files")
+GraphicsDirPath = os.path.join(current_dir, "Frontend", "Graphics")
+os.makedirs(TempDirPath, exist_ok=True)
 
 def AnswerModifier(Answer):
     lines = Answer.split('\n')
@@ -38,22 +39,26 @@ def QueryModifier(Query):
     return new_query.capitalize()
 
 def SetMicrophoneStatus(Command):
-    with open(rf'{TempDirPath}\Mic.data', "w", encoding= 'utf-8') as file:
+    with open(os.path.join(TempDirPath, 'Mic.data'), "w", encoding= 'utf-8') as file:
         file.write(Command)
 
 def GetMicrophoneStatus():
-    with open(rf'{TempDirPath}\Mic.data', "r", encoding= 'utf-8') as file:
-        Status = file.read()
-    return Status
+    try:
+        with open(os.path.join(TempDirPath, 'Mic.data'), "r", encoding= 'utf-8') as file:
+            return file.read()
+    except FileNotFoundError:
+        return ""
 
 def SetAssistantStatus(Status):
-    with open(rf'{TempDirPath}\Status.data', "w", encoding= 'utf-8') as file:
+    with open(os.path.join(TempDirPath, 'Status.data'), "w", encoding= 'utf-8') as file:
         file.write(Status)
         
 def GetAssistantStatus():
-    with open(rf'{TempDirPath}\Status.data', "r", encoding= 'utf-8') as file:
-        Status = file.read()
-    return Status
+    try:
+        with open(os.path.join(TempDirPath, 'Status.data'), "r", encoding= 'utf-8') as file:
+            return file.read()
+    except FileNotFoundError:
+        return ""
 
 def MicButtonInitialed():
     SetMicrophoneStatus("False")
@@ -62,15 +67,15 @@ def MicButtonClosed():
     SetMicrophoneStatus("True")
     
 def GraphicsDirectoryPath(Filename):
-    Path = rf'{GraphicsDirPath}\{Filename}'
+    Path = os.path.join(GraphicsDirPath, Filename)
     return Path
 
 def TempDirectoryPath(Filename):
-    Path = rf'{TempDirPath}\{Filename}'
+    Path = os.path.join(TempDirPath, Filename)
     return Path
 
 def ShowTextScreen(Text):
-    with open(rf'{TempDirPath}\Responses.data', "w", encoding= "utf-8") as file:
+    with open(os.path.join(TempDirPath, 'Responses.data'), "w", encoding= "utf-8") as file:
         file.write(Text)
         
 class ChatSection(QWidget):
