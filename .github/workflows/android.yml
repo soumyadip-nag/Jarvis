@@ -43,23 +43,19 @@ jobs:
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-      # Android only installs an update signed with the same key, so keep one key between builds.
-      - name: Restore signing key
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: jarvis-debug-keystore-v1
-
-      # A permanent key, once it has been added as a repository secret. Until then, the cached one.
-      - name: Create signing key if needed
+      # Android only installs an update signed with the same key. Stop here rather than publish an APK
+      # that couldn't update people's phones.
+      - name: Load the signing key
         env:
           JARVIS_KEYSTORE: ${{ secrets.JARVIS_KEYSTORE }}
         run: |
-          mkdir -p ~/.android
-          if [ -n "$JARVIS_KEYSTORE" ]; then echo "$JARVIS_KEYSTORE" | base64 -d > ~/.android/debug.keystore; fi
-          [ -f ~/.android/debug.keystore ] || keytool -genkeypair -v -keystore ~/.android/debug.keystore \
-            -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
-            -validity 10000 -dname "CN=Jarvis Debug,O=Jarvis,C=IN"
+          mkdir -p mobile/ci-out
+          if [ -z "$JARVIS_KEYSTORE" ]; then
+            echo "JARVIS_KEYSTORE secret is missing or empty" | tee mobile/ci-out/build.log
+            exit 1
+          fi
+          echo "$JARVIS_KEYSTORE" | base64 -d > "$RUNNER_TEMP/jarvis.p12"
+          echo "JARVIS_KEYSTORE_FILE=$RUNNER_TEMP/jarvis.p12" >> "$GITHUB_ENV"
 
       - name: Build APK
         working-directory: mobile
@@ -73,6 +69,7 @@ jobs:
           chmod +x android/gradlew
           (cd android && ./gradlew assembleDebug --no-daemon --stacktrace) 2>&1 | tee -a ci-out/build.log
           cp android/app/build/outputs/apk/debug/app-debug.apk ci-out/jarvis.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs ci-out/jarvis.apk | tee ci-out/signature.txt
           # What the app checks to see whether a newer build exists (one more than the build number, see build.gradle).
           echo "{\"versionCode\": $((JARVIS_BUILD + 1))}" > ci-out/version.json
 

@@ -18,7 +18,25 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Android only installs an update signed with the same key, so builds must use the permanent one.
+    // Without JARVIS_KEYSTORE_FILE (a local build), Android's throwaway debug key is used instead.
+    signingConfigs {
+        jarvis {
+            if (System.getenv("JARVIS_KEYSTORE_FILE")) {
+                storeFile file(System.getenv("JARVIS_KEYSTORE_FILE"))
+                storeType "pkcs12"
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (System.getenv("JARVIS_KEYSTORE_FILE")) {
+                signingConfig signingConfigs.jarvis
+            }
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

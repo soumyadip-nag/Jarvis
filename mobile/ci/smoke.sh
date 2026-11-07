@@ -5,7 +5,16 @@ OUT=mobile/ci-out
 PKG=com.ushnish.jarvis
 exec > >(tee "$OUT/smoke.log") 2>&1
 
-adb install -r "$OUT/jarvis.apk"
+# A real upgrade over the last published build: this is what the update button relies on.
+curl -fsSL -o "$RUNNER_TEMP/previous.apk" https://github.com/RaGnaRoK260404/Jarvis/releases/download/apk-latest/jarvis.apk
+adb install "$RUNNER_TEMP/previous.apk"
+if adb install -r "$OUT/jarvis.apk"; then
+  echo "UPGRADE OVER PREVIOUS BUILD: OK"
+else
+  echo "UPGRADE OVER PREVIOUS BUILD: FAILED"
+  adb uninstall "$PKG"
+  adb install "$OUT/jarvis.apk"
+fi
 
 add_contact() { # name, number, mime type of the number row, account
   adb shell content insert --uri content://com.android.contacts/raw_contacts \

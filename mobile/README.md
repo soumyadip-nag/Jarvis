@@ -11,4 +11,4 @@ button finds it.
 
 Android only installs an update signed with the same key as the installed app. The key is stored in the
 `JARVIS_KEYSTORE` repository secret as a base64 PKCS12 file (password `android`, alias `androiddebugkey`), and
-it must never be committed. If it is lost, everyone has to uninstall and reinstall once with a new key.
+it must never be committed. Builds stop if the secret is missing. If it is lost, everyone has to uninstall and reinstall once with a new key.
