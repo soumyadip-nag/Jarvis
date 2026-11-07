@@ -8,12 +8,14 @@
 //   POST   /api/memories           {text}
 //   DELETE /api/memories/<id>
 //   GET    /api/images/<id>        -> image bytes
+//   POST   /api/speak              {text} -> MP3 of the Jarvis voice
 //   DELETE /api/history            clears the on-screen conversation (archive and memory are kept)
 import { login, verify } from "../../lib/auth.mjs";
 import { respond } from "../../lib/brain.mjs";
 import { messagesSince, clearRecent } from "../../lib/messages.mjs";
 import { listMemories, addMemories, deleteMemory } from "../../lib/memory.mjs";
 import { getImage } from "../../lib/images.mjs";
+import { synthesize, MAX_SPEECH_CHARS } from "../../lib/voice.mjs";
 import { touch, pending, done, status } from "../../lib/devices.mjs";
 
 const json = (data, status = 200) =>
@@ -66,6 +68,17 @@ export default async (req, context) => {
       return new Response(image.bytes, {
         headers: { "Content-Type": image.mime, "Cache-Control": "private, max-age=86400" },
       });
+    }
+
+    if (route === "POST /speak") {
+      const { text } = await body(req);
+      if (!text || typeof text !== "string" || text.length > MAX_SPEECH_CHARS) return json({ error: "Invalid text" }, 400);
+      try {
+        return new Response(await synthesize(text), { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "no-store" } });
+      } catch (e) {
+        console.error("voice failed:", e.message);
+        return json({ error: "The voice service isn't available." }, 502);
+      }
     }
 
     if (route === "GET /memories") return json({ memories: await listMemories() });

@@ -6,6 +6,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@netlify/blobs": "^8.1.0"
+    "@netlify/blobs": "^8.1.0",
+    "msedge-tts": "^2.1.1"
   }
 }

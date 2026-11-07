@@ -234,6 +234,14 @@ test("leaked reasoning never reaches the reply", async () => {
   assert.equal(cleanReply("Two paragraphs here.\n\nBoth are fine."), "Two paragraphs here.\n\nBoth are fine.");
 });
 
+test("the voice endpoint needs a login and valid text, and text can't break its markup", async () => {
+  const { escapeForSpeech } = await import("../lib/voice.mjs");
+  assert.equal((await call("POST", "speak", { body: { text: "Hello" } })).status, 401);
+  assert.equal((await call("POST", "speak", { token: phone, body: {} })).status, 400);
+  assert.equal((await call("POST", "speak", { token: phone, body: { text: "x".repeat(1501) } })).status, 400);
+  assert.equal(escapeForSpeech(`Tom & <Jerry> "said" it's`), "Tom &amp; &lt;Jerry&gt; &quot;said&quot; it&apos;s");
+});
+
 test("brute force is locked out", async () => {
   for (let i = 0; i < 9; i++) await call("POST", "login", { body: { passcode: "guess" + i, device: "phone" } });
   const res = await call("POST", "login", { body: { passcode: process.env.JARVIS_PASSCODE, device: "phone" } });
