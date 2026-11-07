@@ -1,6 +1,7 @@
 """Cloud mode for the desktop app: the shared brain answers, the laptop executes its own commands."""
 import asyncio
 import json
+import os
 import re
 import subprocess
 import sys
@@ -65,11 +66,14 @@ def start_ai_call(cmd, cloud, on_message, on_status):
         on_message("jarvis", f"Calling {name}. I'll report back when the call ends.")
         try:
             # Its own process: it uses the audio library that clashes with the window's, and a crash can't take the app down.
-            subprocess.run(
-                [sys.executable, "-m", "Backend.PhoneCall", "--goal", goal, "--number", cmd["number"], "--result", str(result_path)],
-                cwd=ROOT_DIR, check=True, timeout=LONGEST_CALL_SECONDS,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            # There's no terminal to read, so its messages go to a log. Bengali must not crash the printing.
+            with open(DATA_DIR / "last_call.log", "w", encoding="utf-8") as log:
+                subprocess.run(
+                    [sys.executable, "-m", "Backend.PhoneCall", "--goal", goal, "--number", cmd["number"], "--result", str(result_path)],
+                    cwd=ROOT_DIR, check=True, timeout=LONGEST_CALL_SECONDS, stdout=log, stderr=subprocess.STDOUT,
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
             result = json.loads(result_path.read_text(encoding="utf-8"))
             report(result["report"], result.get("transcript", ""))
         except subprocess.TimeoutExpired:
