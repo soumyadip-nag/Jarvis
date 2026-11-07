@@ -101,6 +101,7 @@ export async function extractAndStore({ userText, replyText, now, known = [] }) 
   try {
     const request = () => chat({
       model: FAST_MODEL(),
+      backup: false, // can be skipped when the AI is short: replies matter more
       json: true,
       temperature: 0.1,
       maxTokens: 1000, // includes the model's reasoning, which can use most of a small budget

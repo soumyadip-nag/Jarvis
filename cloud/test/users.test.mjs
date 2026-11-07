@@ -30,6 +30,7 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
   const u = String(url);
   if (u.includes("serpapi")) { searches++; return new Response(JSON.stringify({ organic_results: [{ title: "T", snippet: "S" }] })); }
+  if (u.includes("/ai/v1/chat")) return new Response("no backup in this test", { status: 429 });
   if (u.includes("cloudflare")) { images++; return new Response(JSON.stringify({ result: { image: Buffer.from("jpeg").toString("base64") } })); }
   if (u.includes("open-meteo")) throw new Error("not needed");
   const body = JSON.parse(init.body);

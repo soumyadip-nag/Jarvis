@@ -32,6 +32,7 @@ globalThis.fetch = async (url, init) => {
     searches.push(String(url));
     return new Response(JSON.stringify({ organic_results: [{ title: "Result", snippet: "Something happened" }] }));
   }
+  if (String(url).includes("/ai/v1/chat")) return new Response("no backup in this test", { status: 429 });
   const body = JSON.parse(init.body);
   if (String(url).includes("cloudflare")) {
     if (body.prompt.includes("fail")) return new Response("nope", { status: 500 });

@@ -1,4 +1,4 @@
-// Groq (OpenAI-compatible) chat with tool calling, and Cohere embeddings.
+// Chat with tool calling (Groq, then Cloudflare as a backup, both OpenAI-compatible), and Cohere embeddings.
 import { store } from "./store.mjs";
 import { allUsers, shareOf } from "./users.mjs";
 
@@ -7,55 +7,135 @@ const COHERE_EMBED_URL = "https://api.cohere.com/v2/embed";
 
 export const MODEL = () => process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 export const FAST_MODEL = () => process.env.GROQ_FAST_MODEL || "openai/gpt-oss-20b";
+const BACKUP_MODEL = () => process.env.CLOUDFLARE_CHAT_MODEL || "@cf/openai/gpt-oss-120b";
 
-// Groq's free tier allows about this many tokens a minute for each model, shared by everyone on the key.
+// Groq's free tier for each model, shared by everyone on the key.
 const TOKENS_PER_MINUTE = () => Number(process.env.GROQ_TOKENS_PER_MINUTE) || 8000;
+const TOKENS_PER_DAY = () => Number(process.env.GROQ_TOKENS_PER_DAY) || 200000;
+// Half of Cloudflare's free 10,000 Neurons a day, so that images, which use the same allowance, keep working.
+const BACKUP_NEURONS_PER_DAY = 5000;
+const neuronsFor = (usage) => ((usage?.prompt_tokens || 0) * 31818 + (usage?.completion_tokens || 0) * 68182) / 1e6;
+const AI_TIMEOUT_MS = 9000; // long enough for a normal reply, and leaves time to try the next provider
 
 export class ShareUsedError extends Error {
-  constructor(seconds) {
-    super("This person's share of the AI for this minute is used up.");
+  constructor(seconds, daily = false) {
+    super("This person's share of the AI is used up.");
     this.seconds = seconds;
+    this.daily = daily;
   }
 }
 
 const usageKey = (model) => `usage/groq/${model.replace(/[^a-z0-9-]+/gi, "-")}`;
+const backupKey = () => `usage/backup/${today()}`;
 const thisMinute = () => Math.floor(Date.now() / 60_000);
+const today = () => new Date(Date.now()).toISOString().slice(0, 10);
 
-async function tokensUsedThisMinute(model) {
+async function usedTokens(model) {
   const usage = await store().get(usageKey(model));
-  return usage?.minute === thisMinute() ? usage.tokens : 0;
+  return {
+    minute: usage?.minute === thisMinute() ? usage.tokens : 0,
+    day: usage?.day === today() ? usage.dayTokens : 0,
+  };
 }
 
 async function recordTokens(model, tokens) {
-  const used = await tokensUsedThisMinute(model);
-  await store().setJSON(usageKey(model), { minute: thisMinute(), tokens: used + tokens });
+  const used = await usedTokens(model);
+  await store().setJSON(usageKey(model), {
+    minute: thisMinute(), tokens: used.minute + tokens, day: today(), dayTokens: used.day + tokens,
+  });
 }
 
-export async function chat({ messages, tools, model = MODEL(), json = false, maxTokens = 1024, temperature = 0.6 }) {
-  if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is not set on the server.");
-  // With more than one person, nobody may use more than their equal share of the per-minute limit.
-  const sharing = allUsers().length > 1;
-  if (sharing && (await tokensUsedThisMinute(model)) >= shareOf(TOKENS_PER_MINUTE())) {
-    if (model !== FAST_MODEL()) return chat({ messages, tools, model: FAST_MODEL(), json, maxTokens, temperature });
-    throw new ShareUsedError(60 - Math.floor(Date.now() / 1000) % 60);
+/** Everyone has an equal share of each limit. Returns why this person can't use a provider, or null if they can. */
+async function shareProblem({ model, backup }) {
+  if (backup) {
+    const used = (await store().get(backupKey()))?.neurons || 0;
+    return used >= shareOf(BACKUP_NEURONS_PER_DAY) ? new ShareUsedError(0, true) : null;
   }
+  if (allUsers().length === 1) return null; // nobody to share with, and Groq enforces the limits itself
+  const used = await usedTokens(model);
+  if (used.day >= shareOf(TOKENS_PER_DAY())) return new ShareUsedError(0, true);
+  if (used.minute >= shareOf(TOKENS_PER_MINUTE())) return new ShareUsedError(60 - Math.floor(Date.now() / 1000) % 60);
+  return null;
+}
+
+async function recordUsage({ model, backup }, usage) {
+  if (backup) {
+    const used = (await store().get(backupKey()))?.neurons || 0;
+    await store().setJSON(backupKey(), { neurons: used + neuronsFor(usage) });
+  } else if (allUsers().length > 1) {
+    await recordTokens(model, usage?.total_tokens || 0);
+  }
+}
+
+const backupReady = () => !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN);
+
+function send({ url, key, model }, { messages, tools, json, maxTokens, temperature }) {
   const body = { model, messages, max_tokens: maxTokens, temperature };
   if (tools?.length) { body.tools = tools; body.tool_choice = "auto"; }
   if (json) body.response_format = { type: "json_object" };
-  const res = await fetch(GROQ_URL, {
+  if (model.includes("gpt-oss")) body.reasoning_effort = "low"; // the hidden reasoning is most of what a short reply costs
+  return fetch(url, {
     method: "POST",
-    headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
   });
-  // The free tier limits tokens per minute for each model, so a busy minute can fall back to the smaller one.
-  if (res.status === 429 && model !== FAST_MODEL()) {
-    console.warn(`Groq rate limit on ${model}; using ${FAST_MODEL()}`);
-    return chat({ messages, tools, model: FAST_MODEL(), json, maxTokens, temperature });
+}
+
+/** A request problem would fail everywhere; anything else (limits, outages, a bad reply from the model) may not. */
+const worthTryingNext = (status, detail) => status >= 500 || status === 429 || status === 401 || status === 403 || detail.includes("tool_use_failed");
+
+/**
+ * The model's message, from the first provider that manages one: the requested Groq model, the smaller one, then
+ * Cloudflare. Pass `backup: false` for work that can be skipped, so that it doesn't use up the backup's allowance.
+ */
+export async function chat({ messages, tools, model = MODEL(), json = false, maxTokens = 1024, temperature = 0.6, backup = true }) {
+  if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is not set on the server.");
+  const groq = (name) => ({ url: GROQ_URL, key: process.env.GROQ_API_KEY, model: name, label: `Groq ${name}` });
+  const providers = [groq(model), ...(model === FAST_MODEL() ? [] : [groq(FAST_MODEL())])];
+  if (backup && backupReady()) {
+    providers.push({
+      url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/v1/chat/completions`,
+      key: process.env.CLOUDFLARE_API_TOKEN,
+      model: BACKUP_MODEL(),
+      label: "Cloudflare",
+      backup: true,
+    });
   }
-  if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = await res.json();
-  if (sharing) await recordTokens(model, data.usage?.total_tokens || 0);
-  return data.choices[0].message;
+
+  let shareUsed = null;
+  let failure = null;
+  const failed = (provider, error) => {
+    console.warn(`${provider.label} failed, trying the next: ${error.message}`);
+    failure = error;
+  };
+  for (const provider of providers) {
+    const problem = await shareProblem(provider);
+    if (problem) { shareUsed ||= problem; continue; }
+    let res;
+    try {
+      res = await send(provider, { messages, tools, json, maxTokens, temperature });
+    } catch (e) { // no connection, or too slow
+      failed(provider, e);
+      continue;
+    }
+    if (!res.ok) {
+      const detail = await res.text();
+      const error = Object.assign(new Error(`${provider.label} ${res.status}: ${detail.slice(0, 300)}`), { status: res.status });
+      if (!worthTryingNext(res.status, detail)) throw error;
+      failed(provider, error);
+      continue;
+    }
+    const data = await res.json().catch(() => null);
+    const message = data?.choices?.[0]?.message;
+    if (!message?.content?.trim() && !message?.tool_calls?.length) {
+      failed(provider, new Error(`${provider.label} returned an empty reply`));
+      continue;
+    }
+    await recordUsage(provider, data.usage);
+    return message;
+  }
+  throw shareUsed || failure;
 }
 
 /** Turns recorded speech into text with Groq's Whisper. */

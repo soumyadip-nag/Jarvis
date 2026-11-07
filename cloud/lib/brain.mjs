@@ -14,6 +14,10 @@ const USER = () => currentUser().name;
 const HONORIFIC = () => currentUser().honorific;
 
 const MAX_STEPS = 4;
+// What's sent with each question, which costs tokens every time. Long-term memory is recalled separately.
+const RECENT_MESSAGES = 10;
+const LONGEST_RECENT_MESSAGE = 800;
+const shortened = (text) => (text.length > LONGEST_RECENT_MESSAGE ? `${text.slice(0, LONGEST_RECENT_MESSAGE)}…` : text);
 const ANSWER_NOW = "Give your final answer to the user now, in one to three short spoken sentences. " +
   "You have no tools available and cannot search again. If results are listed above, report the most relevant of them, " +
   "even if they are not a perfect match. If a tool failed or returned nothing useful, say that plainly. " +
@@ -292,7 +296,7 @@ function localTime(tz) {
  */
 export async function respond({ text, device, tz, defer = (p) => p }) {
   const now = localTime(tz);
-  const history = (await recentMessages()).slice(-16);
+  const history = (await recentMessages()).slice(-RECENT_MESSAGES);
   const userMsg = await addMessage({ role: "user", content: text, device });
   const memories = await recall(text, 8);
 
@@ -303,7 +307,7 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
       : []),
     ...history.map((m) => ({
       role: m.role,
-      content: m.role === "user" && m.device !== device ? `(from ${m.device}) ${m.content}` : m.content,
+      content: shortened(m.role === "user" && m.device !== device ? `(from ${m.device}) ${m.content}` : m.content),
     })),
     { role: "user", content: text },
   ];
@@ -338,9 +342,15 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
     }
   } catch (e) {
     console.error("chat failed:", e);
-    reply = e instanceof ShareUsedError
-      ? `You've used your share of the AI for this minute, ${HONORIFIC()}. Please try again in about ${e.seconds} seconds.`
-      : `I'm having trouble reaching my servers, ${HONORIFIC()}. ${e.message.includes("not set") ? e.message : "Please try again shortly."}`;
+    if (e instanceof ShareUsedError) {
+      reply = e.daily
+        ? `You've used your share of the AI for today, ${HONORIFIC()}. It comes back tomorrow.`
+        : `You've used your share of the AI for this minute, ${HONORIFIC()}. Please try again in about ${e.seconds} seconds.`;
+    } else if (e.status === 429) {
+      reply = `I've used up today's free AI allowance, ${HONORIFIC()}. It comes back gradually, so please try again a little later.`;
+    } else {
+      reply = `I'm having trouble reaching my servers, ${HONORIFIC()}. ${e.message.includes("not set") ? e.message : "Please try again shortly."}`;
+    }
   }
   if (!reply) reply = ctx.actions.length ? `Done, ${HONORIFIC()}.` : `I'm afraid I lost my train of thought, ${HONORIFIC()}.`;
 
