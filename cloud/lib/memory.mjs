@@ -95,6 +95,9 @@ projects, habits, opinions, things they asked to remember, and corrections to kn
 Write each memory as a short, self-contained sentence in the third person ("The user ...").
 Resolve relative dates ("tomorrow") into absolute dates using the current date given.
 Do NOT store small talk, the assistant's own answers or general knowledge.
+Do NOT store requests or commands, such as "The user wants the assistant to call Sam".
+Do NOT store what happened on a phone call, or anything only the assistant claimed.
+Only say what the user is named if they clearly say it is their own name.
 Return JSON: {"memories": ["..."]} (empty list if nothing is worth remembering).`;
 
 export async function extractAndStore({ userText, replyText, now, known = [] }) {

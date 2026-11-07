@@ -17,18 +17,36 @@ const toolCall = (name, args) => ({
   usage: { total_tokens: 10 },
 });
 const say = (content) => ({ choices: [{ message: { role: "assistant", content } }], usage: { total_tokens: 10 } });
-let lastToolResult = "";
+let aiAskedAfterTool = 0;
+let memoryRequests = 0;
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
-  if (body.response_format) return new Response(JSON.stringify(say('{"memories":[]}')));
+  if (body.response_format) {
+    memoryRequests++;
+    return new Response(JSON.stringify(say('{"memories":[]}')));
+  }
   const last = body.messages.at(-1);
   if (last.role === "tool") {
-    lastToolResult = last.content;
-    return new Response(JSON.stringify(say("Understood.")));
+    aiAskedAfterTool++;
+    return new Response(JSON.stringify(say("Kohen answered. He said yes.")));
   }
   const number = last.content.match(/ring (\+?\d+)/)?.[1];
   const contact = number || last.content.match(/ring (\w+)/)?.[1];
+  if (last.content.includes("Riya")) {
+    const stale = toolCall("ai_call", { contact: "Kohen", goal: "Something from earlier" });
+    const right = { id: "c2", type: "function", function: { name: "ai_call", arguments: JSON.stringify({ contact: "Riya", goal: "Say hello" }) } };
+    stale.choices[0].message.tool_calls.push(right);
+    return new Response(JSON.stringify(stale));
+  }
+  if (last.content.includes("wrong person only")) {
+    return new Response(JSON.stringify(toolCall("ai_call", { contact: "Kohen", goal: "Something from earlier" })));
+  }
+  if (last.content.includes("twice")) {
+    const one = toolCall("ai_call", { contact, goal: "Ask if they're free" });
+    one.choices[0].message.tool_calls.push({ ...one.choices[0].message.tool_calls[0], id: "c2" });
+    return new Response(JSON.stringify(one));
+  }
   if (contact) return new Response(JSON.stringify(toolCall("ai_call", { contact, goal: "Ask if they're free" })));
   return new Response(JSON.stringify(say("Very good.")));
 };
@@ -105,10 +123,59 @@ test("without the laptop running, nothing is queued and the AI is told to say so
   const samPhone = await login("sam-pass", "phone");
   const { data } = await chat(samPhone, "ring Kohen and ask if he's free");
   assert.equal(data.actions.length, 0);
-  assert.match(lastToolResult, /desktop app isn't running/);
+  assert.match(data.reply.content, /desktop app isn't open/);
   assert.equal((await commands(samPhone)).length, 0);
   await clear(laptop);
   assert.equal((await commands(laptop)).length, 0);
+});
+
+test("the AI never gets to describe a call: it isn't asked again, whatever it would say", async () => {
+  await clear(laptop);
+  await clear(phone);
+  aiAskedAfterTool = 0;
+  const asked = await chat(laptop, "ring Kohen and ask if he's free");
+  assert.match(asked.data.reply.content, /asked your phone to find Kohen/);
+  const direct = await chat(laptop, "ring +919876543210 and ask if he's free");
+  assert.match(direct.data.reply.content, /laptop is calling/);
+  assert.equal(aiAskedAfterTool, 0);
+  await clear(phone);
+  await clear(laptop);
+});
+
+test("someone from earlier in the chat isn't called by mistake", async () => {
+  await clear(laptop);
+  const { data } = await chat(phone, "ring Riya and say hello");
+  assert.deepEqual(data.actions.map((a) => [a.name, a.goal]), [["Riya", "Say hello"]]);
+
+  const wrong = await chat(phone, "wrong person only please");
+  assert.equal(wrong.data.actions.length, 0);
+  assert.equal((await commands(laptop)).length, 0);
+});
+
+test("referring back to someone still works", async () => {
+  await clear(laptop);
+  await clear(phone);
+  const { data } = await chat(phone, "ring him again and ask if he's free");
+  assert.equal(data.actions.length, 1);
+});
+
+test("one message makes one call, even if the AI asks twice", async () => {
+  await clear(laptop);
+  await chat(phone, "ring +919876543210 twice");
+  assert.equal((await commands(laptop)).length, 1);
+  await clear(laptop);
+});
+
+test("asking for a call isn't saved as a memory, but other messages still are", async () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 30)); // memories are saved after the reply
+  await settle();
+  memoryRequests = 0;
+  await chat(phone, "ring Kohen and ask if he's free");
+  await settle();
+  assert.equal(memoryRequests, 0);
+  await chat(phone, "my favourite colour is green");
+  await settle();
+  assert.equal(memoryRequests, 1);
 });
 
 test("the report appears in the shared chat for every device, and in the conversation", async () => {

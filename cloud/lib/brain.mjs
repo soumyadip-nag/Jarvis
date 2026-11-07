@@ -68,6 +68,8 @@ Devices and actions:
 - After looking something up, such as the weather, just give the answer once, with no confirmation.
 - You cannot set alarms or reminders yet; say so politely if asked.
 - Calls come in two kinds. If the request to call someone also says anything to ask, tell or find out, you do the talking: use ai_call, as in "call Sam and ask if he's free" or "ring Sam and tell him I'm late".
+- Act only on the user's latest message. Earlier requests in this conversation have already been dealt with, so never repeat them.
+- You never know how a call went until a message starting with "📞 Call to" appears. Never say that someone answered or what they said without one.
 - If it only says to call someone, with nothing to ask or tell them, the user will do the talking: use phone_action with action "call" and their name as the target. The phone looks up its own contacts, so you never need their number. Never say you don't have a number, even if an earlier call in this conversation went differently.
 - For any weather question use get_weather, never web_search. Give the conditions in a sentence or two. If the result says live weather is unavailable, say when you last checked and do not present it as current.
 - Web searches are limited each day, so only use web_search when the answer really needs current information.
@@ -209,6 +211,15 @@ function tools() {
   return list;
 }
 
+/** Whether the user's latest message names this person, or refers back to someone ("call him again"). */
+function meantInLatestMessage(contact, text) {
+  const said = text.toLowerCase();
+  const digits = contact.replace(/\D/g, "");
+  if (digits.length >= 3 && text.replace(/\D/g, "").includes(digits)) return true;
+  if (contact.toLowerCase().split(/\s+/).some((word) => word.length > 1 && said.includes(word))) return true;
+  return /\b(him|her|them|again|same|back)\b/.test(said);
+}
+
 /** Execute one tool call. Returns the text fed back to the model. Collects device actions in ctx. */
 async function runTool(name, args, ctx) {
   switch (name) {
@@ -228,32 +239,45 @@ async function runTool(name, args, ctx) {
       }
       await enqueue("phone", action);
       ctx.actions.push({ ...action, queued: true });
+      if (link.contact) {
+        ctx.fixedReply = `I've asked your phone to call ${link.contact}, ${HONORIFIC()}.`;
+        return ctx.fixedReply;
+      }
       return (await isOnline("phone"))
         ? `Sent to the phone: ${link.label}`
         : `Queued for the phone (${link.label}); it will appear when the Jarvis app is next opened there.`;
     }
     case "ai_call": {
+      // These replies are fixed, not written by the AI: left to itself, it has claimed that calls were answered
+      // when no call had happened. Only the laptop's report can say how a call went.
+      const say = (text) => { ctx.fixedReply = text; return text; };
+      if (ctx.callRequested) return "That call has already been requested.";
       const contact = String(args.contact || "").trim();
       const goal = String(args.goal || "").trim();
-      if (!contact || !goal) return "Ask who to call and what to say.";
+      // The AI has picked up people from earlier in the chat, which would ring the wrong person.
+      if (contact && !meantInLatestMessage(contact, ctx.text)) {
+        return `Don't call ${contact}: they aren't in the user's latest message. Act only on that message; earlier calls have already been dealt with.`;
+      }
+      ctx.callRequested = true;
+      if (!contact || !goal) return say(`Who should I call, ${HONORIFIC()}, and what should I ask them?`);
       if (!(await isOnline("laptop"))) {
-        return "Couldn't start the call: calls run on the laptop, and the Jarvis desktop app isn't running there. Tell the user to open it and ask again.";
+        return say(`I can't make that call, ${HONORIFIC()}. Calls run on your laptop, and the Jarvis desktop app isn't open there. Please open it and ask again.`);
       }
       if (/^[+\d][\d\s()-]{2,}$/.test(contact)) {
         await enqueue("laptop", { type: "ai_call", name: contact, number: contact.replace(/[^\d+]/g, ""), goal });
-        return `The laptop is calling ${contact}. Tell the user you'll report back in the chat when the call ends.`;
+        return say(`Your laptop is calling ${contact}, ${HONORIFIC()}, to do this: ${goal} I'll report back here when the call ends.`);
       }
       const action = { type: "ai_call", device: "phone", name: contact, goal, label: `Call ${contact}` };
       if (ctx.device === "phone") {
         ctx.actions.push(action);
-        return `The phone is finding "${contact}" in its contacts and will say what happens. Reply only "One moment."`;
+        return say("One moment."); // the phone replaces this once it has looked in its contacts
       }
       if (!(await isOnline("phone"))) {
-        return "Couldn't start the call: names are looked up in the contacts on the phone, and the Jarvis app isn't open there. Tell the user to open it and ask again, or to give the number.";
+        return say(`I can't make that call yet, ${HONORIFIC()}. Names are looked up in your phone's contacts, and the Jarvis app isn't open there. Please open it and ask again, or give me the number.`);
       }
       await enqueue("phone", action);
       ctx.actions.push({ ...action, queued: true });
-      return `The phone is finding "${contact}" in its contacts, then the laptop will call them. Tell the user you'll report back in the chat.`;
+      return say(`I've asked your phone to find ${contact}, ${HONORIFIC()}. Your laptop will then call them to do this: ${goal} I'll report back here.`);
     }
     case "laptop_command": {
       const action = { type: "laptop_command", device: "laptop", command: args.command, label: args.command };
@@ -353,7 +377,7 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
     { role: "user", content: text },
   ];
 
-  const ctx = { device, tz, actions: [], remembered: false };
+  const ctx = { device, tz, text, actions: [], remembered: false };
   let reply = "";
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -377,6 +401,10 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
         catch (e) { result = `Tool error: ${e.message}`; }
         messages.push({ role: "tool", tool_call_id: call.id, content: String(result).slice(0, 4000) });
       }
+      if (ctx.fixedReply) {
+        reply = ctx.fixedReply;
+        break;
+      }
     }
     if (!reply && !ctx.actions.length) {
       reply = await finalAnswer(messages, 0.2);
@@ -397,7 +425,8 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
 
   const replyMsg = await addMessage({ role: "assistant", content: reply, device, actions: ctx.actions });
 
-  if (!ctx.remembered) {
+  // Asking for a call says nothing worth remembering, and Jarvis can't yet know how it went.
+  if (!ctx.remembered && !ctx.fixedReply) {
     defer(extractAndStore({ userText: text, replyText: reply, now, known: memories }));
   }
   return { user: userMsg, reply: replyMsg, actions: ctx.actions };

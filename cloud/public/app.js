@@ -153,7 +153,7 @@
     const outcome = callOutcome(a.name);
     if (!outcome.contact) return outcome.say;
     await api("calls", { method: "POST", body: { name: outcome.contact.name, number: outcome.contact.tel, goal: a.goal } });
-    return `Your laptop is calling ${outcome.contact.name}, ${profile.honorific}. I'll report back here when the call ends.`;
+    return `Your laptop is calling ${outcome.contact.name}, ${profile.honorific}, to do this: ${a.goal} I'll report back here when the call ends.`;
   }
 
   function renderContactsInfo() {

@@ -98,6 +98,16 @@ test("work that can be skipped doesn't use the backup", async () => {
   assert.deepEqual(models(), [SMALL]);
 });
 
+test("a bad reply from the backup gets a second try", async () => {
+  let tries = 0;
+  behaviour = {
+    [MAIN]: limited,
+    [SMALL]: limited,
+    [BACKUP]: () => (++tries === 1 ? answer("<|channel|>analysis Thinking.<|end|>") : answer("A clean reply")),
+  };
+  assert.equal((await ask()).content, "A clean reply");
+});
+
 test("with everything limited, the error says it was a limit", async () => {
   behaviour = { [MAIN]: limited, [SMALL]: limited, [BACKUP]: limited };
   await assert.rejects(ask(), (e) => e.status === 429);

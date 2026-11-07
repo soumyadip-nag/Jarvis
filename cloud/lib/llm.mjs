@@ -95,13 +95,14 @@ export async function chat({ messages, tools, model = MODEL(), json = false, max
   const groq = (name) => ({ url: GROQ_URL, key: process.env.GROQ_API_KEY, model: name, label: `Groq ${name}` });
   const providers = [groq(model), ...(model === FAST_MODEL() ? [] : [groq(FAST_MODEL())])];
   if (backup && backupReady()) {
-    providers.push({
+    const cloudflare = {
       url: `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/ai/v1/chat/completions`,
       key: process.env.CLOUDFLARE_API_TOKEN,
       model: BACKUP_MODEL(),
       label: "Cloudflare",
       backup: true,
-    });
+    };
+    providers.push(cloudflare, cloudflare); // twice, as it's the last resort and a bad reply is usually fine next time
   }
 
   let shareUsed = null;

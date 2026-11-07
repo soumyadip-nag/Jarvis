@@ -35,6 +35,7 @@ DEFAULT_GOAL = f"This is a test call. Ask how their day is going and whether the
 MAX_TURNS = 6
 REASONING_EFFORT = "low"   # Less hidden reasoning means a faster reply and fewer tokens used.
 AI_TIMEOUT_SECONDS = 8
+SPEECH_RATE = 16000        # Speech is made at this rate, and converted when played, as the device can change.
 BACKUP_MODEL = "@cf/openai/gpt-oss-120b"
 END_MARK = "[END]"
 SPEECH_LEVEL = 0.02        # Louder than this counts as someone talking (0 to 1). Calls measured about 0.1 for speech.
@@ -241,14 +242,14 @@ def recognise(client, audio, rate, asked):
     return (None if not answer or UNCLEAR_MARK in answer else answer), heard
 
 
-def hear_and_reply(client, goal, history, audio, rate, out_rate):
+def hear_and_reply(client, goal, history, audio, rate):
     """One turn's slow work: returns (what they said, what was heard, the reply, its audio, seconds for each step)."""
     t0 = time.time()
     text, heard = recognise(client, audio, rate, history[-1]["content"])
     t1 = time.time()
     reply = think(client, goal, [*history, {"role": "user", "content": text or COULD_NOT_HEAR}])
     t2 = time.time()
-    speech = render_speech(reply.replace(END_MARK, "").strip() or "Thank you. Goodbye.", out_rate)
+    speech = render_speech(reply.replace(END_MARK, "").strip() or "Thank you. Goodbye.", SPEECH_RATE)
     return text, heard, reply, speech, (t1 - t0, t2 - t1, time.time() - t2)
 
 
@@ -270,12 +271,18 @@ def write_report(client, goal, history):
 
 class Call:
     def __init__(self):
-        (self.mic_index, mic), (self.out_index, out) = find_call_devices()
-        if not (mic and out):
-            raise CallFailed("your Pixel isn't connected to the laptop in Phone Link")
-        self.mic_rate, self.out_rate = int(mic["default_samplerate"]), int(out["default_samplerate"])
+        if not self.find_devices():
+            raise CallFailed("I didn't start the call, because your Pixel isn't connected to the laptop in Phone Link.")
         self.heard = queue.Queue()
         self.dropouts = 0
+
+    def find_devices(self):
+        (mic_index, mic), (out_index, out) = find_call_devices()
+        if not (mic and out):
+            return False
+        self.mic_index, self.out_index = mic_index, out_index
+        self.mic_rate, self.out_rate = int(mic["default_samplerate"]), int(out["default_samplerate"])
+        return True
 
     def on_audio(self, chunk, frames, time_info, status):
         if status.input_overflow:
@@ -284,6 +291,8 @@ class Call:
 
     def say(self, speech):
         """Plays speech into the call, with a moment of silence first so its start isn't clipped."""
+        length = int(len(speech) * self.out_rate / SPEECH_RATE)
+        speech = np.interp(np.linspace(0, len(speech) - 1, length), np.arange(len(speech)), speech).astype(np.float32)
         sd.play(np.concatenate([np.zeros(int(self.out_rate * 0.2), np.float32), speech]), self.out_rate,
                 device=self.out_index, blocking=True, latency="high")
 
@@ -305,17 +314,26 @@ class Call:
                 return None
 
     def open_input(self):
-        """Starts hearing the call. Its audio devices can refuse until the call is under way, so keep trying."""
+        """Starts hearing the call. Starting a call changes the laptop's audio devices, and the library only reads
+        the list once, so it has to look again. They can also refuse until the call is under way, so keep trying."""
         deadline = time.time() + AUDIO_START_SECONDS
         while True:
             try:
+                sd._terminate()
+                sd._initialize()
+                if not self.find_devices():
+                    raise sd.PortAudioError("the Pixel's hands-free devices have gone")
                 stream = sd.InputStream(device=self.mic_index, samplerate=self.mic_rate, channels=1, dtype="float32",
                                         blocksize=int(self.mic_rate * 0.03), callback=self.on_audio, latency="high")
                 stream.start()
                 return stream
             except sd.PortAudioError as e:
                 if time.time() > deadline:
-                    raise CallFailed(f"the call's audio never became available ({e})") from None
+                    print(f"Audio error: {e}")
+                    raise CallFailed(
+                        "I started the call but couldn't connect to its audio, so I said nothing. If it's still ringing "
+                        "or connected, please end it in Phone Link."
+                    ) from None
                 time.sleep(1)
 
 
@@ -343,7 +361,7 @@ def dial(number):
     try:
         os.startfile(f"tel:{number}")
     except OSError as e:
-        raise CallFailed(f"Phone Link wouldn't start the call ({e})") from None
+        raise CallFailed(f"Phone Link wouldn't start the call ({e}).") from None
 
 
 def run_call(goal, number=None):
@@ -359,13 +377,13 @@ def run_call(goal, number=None):
         {"role": "user", "content": "(The call has just connected and you've introduced yourself. Say your first line.)"},
     ])
     if not first_line:
-        raise CallFailed("the AI isn't available, probably because its free limits are used up")
+        raise CallFailed("I didn't start the call, because the AI isn't available. Its free limits are probably used up.")
     opening = (
         f"Hello, this is {ASSISTANT_NAME}, an A I assistant calling on behalf of {USERNAME}. "
         "This call is being recorded. " + first_line.replace(END_MARK, "")
     )
-    opening_speech = render_speech(opening, call.out_rate)
-    acknowledgements = itertools.cycle([render_speech(a, call.out_rate) for a in ACKNOWLEDGEMENTS])
+    opening_speech = render_speech(opening, SPEECH_RATE)
+    acknowledgements = itertools.cycle([render_speech(a, SPEECH_RATE) for a in ACKNOWLEDGEMENTS])
 
     if number:
         print(f"Dialling {number}")
@@ -385,7 +403,11 @@ def run_call(goal, number=None):
                 try:
                     answered = wait_for_answer(call, heard_words)
                 except APIError as e:
-                    raise CallFailed(f"couldn't listen for an answer ({str(e)[:120]})") from None
+                    print(f"Listening for an answer failed: {e}")
+                    raise CallFailed(
+                        "I started the call but couldn't listen for an answer, so I said nothing. If it's still ringing "
+                        "or connected, please end it in Phone Link."
+                    ) from None
                 if not answered:
                     return {
                         "outcome": "no_answer", "transcript": "",
@@ -402,16 +424,16 @@ def run_call(goal, number=None):
                     silences += 1
                     if silences == 2:
                         print("(no answer twice, ending the call)")
-                        call.say(render_speech("I can't hear anyone, so I'll end the call here. Goodbye.", call.out_rate))
+                        call.say(render_speech("I can't hear anyone, so I'll end the call here. Goodbye.", SPEECH_RATE))
                         history.append({"role": "assistant", "content": "I can't hear anyone, so I'll end the call here. Goodbye."})
                         break
-                    call.say(render_speech("Sorry, are you still there?", call.out_rate))
+                    call.say(render_speech("Sorry, are you still there?", SPEECH_RATE))
                     continue
                 silences = 0
 
                 (DATA_DIR / f"call_{call_started:%Y%m%d_%H%M%S}_turn{turn + 1}.wav").write_bytes(to_wav(audio, call.mic_rate))
                 started = time.time()
-                work = background.submit(hear_and_reply, client, goal, history, audio, call.mic_rate, call.out_rate)
+                work = background.submit(hear_and_reply, client, goal, history, audio, call.mic_rate)
                 call.say(next(acknowledgements))
                 text, heard, reply, speech, steps = work.result()
                 recognised.append(f"{turn + 1}. {heard}")
@@ -454,7 +476,7 @@ def main():
         result = run_call(args.goal, args.number)
     except CallFailed as e:
         print(f"The call failed: {e}")
-        result = {"outcome": "failed", "report": f"I couldn't make the call: {e}.", "transcript": ""}
+        result = {"outcome": "failed", "report": str(e), "transcript": ""}
     if args.result:
         with open(args.result, "w", encoding="utf-8") as f:
             json.dump(result, f)
