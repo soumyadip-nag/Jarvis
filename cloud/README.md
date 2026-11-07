@@ -58,6 +58,22 @@ The footer shows **● PHONE ONLINE** when both are connected.
   "play lo-fi on my phone" (from the laptop) pops up on the phone. Commands wait up to 24 hours
   if the other device is offline.
 
+## Several people
+
+Each person gets their own chat, memory, images, weather and device sync. They can't see each other's.
+Add people in Netlify with `JARVIS_USERS`, then redeploy:
+
+```
+[{"id":"kohen","name":"Kohen Maity","honorific":"Kohen","passcode":"a long passphrase"}]
+```
+
+`id` is lower-case letters, numbers and dashes, and shouldn't change later, because it decides where that
+person's data lives. Removing someone ends their sessions but keeps their data.
+
+Every limit is split equally between everyone, adjusting by itself as people are added. Unused shares aren't
+passed on. With N people, each gets 8/N web searches a day, 170/N images a day, and 8,000/N Groq tokens a minute
+on each model. The owner's own data stays where it has always been.
+
 ## Weather
 
 Weather uses [Open-Meteo](https://open-meteo.com), which is free for private, non-commercial use and

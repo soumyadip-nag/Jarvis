@@ -24,6 +24,12 @@
   let busy = false;
   let latestRequest = 0;
   let contacts = store.get("contacts", []);
+  let profile = store.get("profile", { name: "", honorific: "sir" });
+  const setProfile = (user) => {
+    if (!user) return;
+    profile = user;
+    store.set("profile", user);
+  };
   let state = "booting";
   let lastActivity = Date.now();
   let syncTimer = null;
@@ -208,9 +214,9 @@
   function callOutcome(name) {
     const matches = JarvisContacts.rank(name, contacts);
     const best = JarvisContacts.bestMatch(matches);
-    if (best) return { contact: best, say: `Calling ${best.name}, sir.` };
-    if (matches.length) return { say: `I found more than one match for ${name}, sir. Which one?` };
-    return { say: `I can't find ${name} in your imported contacts, sir.` };
+    if (best) return { contact: best, say: `Calling ${best.name}, ${profile.honorific}.` };
+    if (matches.length) return { say: `I found more than one match for ${name}, ${profile.honorific}. Which one?` };
+    return { say: `I can't find ${name} in your imported contacts, ${profile.honorific}.` };
   }
 
   function actionEl(a) {
@@ -528,7 +534,7 @@
     const button = $("#call-test-start");
     button.disabled = true;
     out.textContent = "Calling. Tap the notification when they answer.";
-    const message = "Hello, this is Jarvis, an A I assistant calling on behalf of Ushnish. This is a test call and this call is being recorded. Please say a few words after this message.";
+    const message = `Hello, this is Jarvis, an A I assistant calling on behalf of ${profile.name}. This is a test call and this call is being recorded. Please say a few words after this message.`;
     try {
       const r = await Native("startCallTest", { number, message });
       const peaks = r.loudestPerSecond || [];
@@ -704,6 +710,7 @@
       const wasBusy = busy;
       try {
         const data = await api("sync?since=" + lastTs);
+        setProfile(data.user);
         if (!busy && !wasBusy) {
           for (const m of data.messages) renderMessage(m);
           for (const c of data.commands) await handleCommand(c);
@@ -720,7 +727,7 @@
 
   function greeting() {
     const h = new Date().getHours();
-    return (h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening") + ", sir.";
+    return (h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening") + `, ${profile.honorific}.`;
   }
 
   // ───────── memory view ─────────
@@ -779,7 +786,17 @@
     token = null;
     store.del("token");
     store.del("contacts");
+    store.del("profile");
     contacts = [];
+    // Someone else may sign in next on this phone, so nothing of this person's can stay on screen.
+    stopSpeaking();
+    chatEl().innerHTML = "";
+    seen.clear();
+    lastTs = 0;
+    memories = [];
+    $("#memory-list").innerHTML = "";
+    $("#device-name").textContent = "";
+    showView("chat");
     clearTimeout(syncTimer);
     $("#app").hidden = true;
     $("#login").hidden = false;
@@ -813,6 +830,7 @@
       try {
         const data = await api("login", { method: "POST", body: { passcode: $("#passcode").value, device: DEVICE } });
         token = data.token;
+        setProfile(data.user);
         store.set("token", token);
         $("#passcode").value = "";
         start();

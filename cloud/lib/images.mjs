@@ -1,6 +1,11 @@
 // Image generation for the cloud brain (Cloudflare Workers AI). Images are stored privately in the
 // shared store and can only be fetched with a device token (GET /api/images/<id>).
 import { store, newId } from "./store.mjs";
+import { shareOf } from "./users.mjs";
+
+// Roughly what Cloudflare's free 10,000 daily units cover at 1024x1024 and 4 steps. Split between everyone.
+const IMAGES_PER_DAY = 170;
+const usageKey = () => `usage/images/${new Date().toISOString().slice(0, 10)}`; // Cloudflare's day runs on UTC
 
 const MODEL = () => process.env.CLOUDFLARE_IMAGE_MODEL || "@cf/black-forest-labs/flux-1-schnell";
 const key = (id) => `images/${id}`;
@@ -24,10 +29,14 @@ async function renderOne(prompt) {
 
 /** Generate up to 4 images, store them and return their ids. Throws if none could be made. */
 export async function generateImages(prompt, count = 1) {
-  const n = Math.min(4, Math.max(1, Math.round(Number(count)) || 1));
+  const share = shareOf(IMAGES_PER_DAY);
+  const used = (await store().get(usageKey()))?.count || 0;
+  if (used >= share) throw new Error(`Today's share of ${share} images has been used. It resets tomorrow.`);
+  const n = Math.min(4, share - used, Math.max(1, Math.round(Number(count)) || 1));
   const results = await Promise.allSettled(Array.from({ length: n }, () => renderOne(prompt)));
   const images = results.filter((r) => r.status === "fulfilled").map((r) => r.value);
   if (!images.length) throw results[0].reason;
+  await store().setJSON(usageKey(), { count: used + images.length });
   const ids = [];
   for (const data of images) {
     const id = newId();

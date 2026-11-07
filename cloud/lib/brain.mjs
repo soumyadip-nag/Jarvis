@@ -1,16 +1,17 @@
 // The assistant: persona, tools and the tool-calling loop.
-import { chat } from "./llm.mjs";
+import { chat, ShareUsedError } from "./llm.mjs";
 import { recall, addMemories, forgetMatching, extractAndStore } from "./memory.mjs";
 import { addMessage, recentMessages, searchArchive } from "./messages.mjs";
 import { phoneActionToUrl } from "./actions.mjs";
 import { enqueue, isOnline } from "./devices.mjs";
 import { generateImages, imagesEnabled } from "./images.mjs";
 import { getWeather } from "./weather.mjs";
+import { currentUser } from "./users.mjs";
 import { webSearch } from "./search.mjs";
 
 const NAME = () => process.env.ASSISTANT_NAME || "Jarvis";
-const USER = () => process.env.USER_NAME || "the user";
-const HONORIFIC = () => process.env.HONORIFIC || "sir";
+const USER = () => currentUser().name;
+const HONORIFIC = () => currentUser().honorific;
 
 const MAX_STEPS = 4;
 const ANSWER_NOW = "Give your final answer to the user now, in one to three short spoken sentences. " +
@@ -337,7 +338,9 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
     }
   } catch (e) {
     console.error("chat failed:", e);
-    reply = `I'm having trouble reaching my servers, ${HONORIFIC()}. ${e.message.includes("not set") ? e.message : "Please try again shortly."}`;
+    reply = e instanceof ShareUsedError
+      ? `You've used your share of the AI for this minute, ${HONORIFIC()}. Please try again in about ${e.seconds} seconds.`
+      : `I'm having trouble reaching my servers, ${HONORIFIC()}. ${e.message.includes("not set") ? e.message : "Please try again shortly."}`;
   }
   if (!reply) reply = ctx.actions.length ? `Done, ${HONORIFIC()}.` : `I'm afraid I lost my train of thought, ${HONORIFIC()}.`;
 

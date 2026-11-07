@@ -1,7 +1,8 @@
 // Web search through SerpAPI. The free plan allows 250 searches a month, so stop at 250/30 a day.
 import { store } from "./store.mjs";
+import { shareOf } from "./users.mjs";
 
-export const SEARCH_DAILY_CAP = Math.floor(250 / 30); // 8
+export const SEARCH_DAILY_CAP = Math.floor(250 / 30); // 8, split equally between everyone
 
 function localDate(ms, tz) {
   const format = (timeZone) => new Intl.DateTimeFormat("en-CA", { timeZone, dateStyle: "short" }).format(new Date(ms));
@@ -12,7 +13,7 @@ function localDate(ms, tz) {
 async function takeSearch(now, tz) {
   const key = `search/usage/${localDate(now, tz)}`;
   const used = (await store().get(key))?.count || 0;
-  if (used >= SEARCH_DAILY_CAP) return false;
+  if (used >= shareOf(SEARCH_DAILY_CAP)) return false;
   await store().setJSON(key, { count: used + 1 });
   return true;
 }
@@ -20,7 +21,7 @@ async function takeSearch(now, tz) {
 /** Returns text for the model. Never includes the API key. */
 export async function webSearch(query, tz, now = Date.now()) {
   if (!(await takeSearch(now, tz))) {
-    return `Not searched: today's limit of ${SEARCH_DAILY_CAP} web searches has been reached, and it resets tomorrow. ` +
+    return `Not searched: today's limit of ${shareOf(SEARCH_DAILY_CAP)} web searches has been reached, and it resets tomorrow. ` +
       "Tell the user plainly. If you answer from what you already know, say it may be out of date.";
   }
   const url = `https://serpapi.com/search.json?engine=google&num=5&q=${encodeURIComponent(query)}&api_key=${process.env.SERPAPI_KEY}`;
