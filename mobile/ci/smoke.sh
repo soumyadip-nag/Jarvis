@@ -18,6 +18,7 @@ add_contact() { # name, number, mime type of the number row, account
 add_contact "Ravi Kumar" "+919800000001" "vnd.android.cursor.item/phone_v2" "com.google"
 add_contact "Whatsapp Only" "919800000002@s.whatsapp.net" "vnd.android.cursor.item/vnd.com.whatsapp.profile" "com.whatsapp"
 
+adb shell appops set "$PKG" REQUEST_INSTALL_PACKAGES allow
 for p in READ_CONTACTS CALL_PHONE RECORD_AUDIO POST_NOTIFICATIONS; do adb shell pm grant "$PKG" "android.permission.$p"; done
 
 adb logcat -c
@@ -34,5 +35,7 @@ sleep 5
 adb exec-out screencap -p > "$OUT/screen-after-call.png"
 adb shell dumpsys telephony.registry | grep -m2 -E "mCallState|mCallIncomingNumber"
 adb exec-out screencap -p > "$OUT/screen-call-test.png"
+sleep 15
+adb exec-out screencap -p > "$OUT/screen-update.png"
 adb logcat -d > "$OUT/logcat.txt"
 exit 0

@@ -50,15 +50,21 @@ jobs:
           path: ~/.android/debug.keystore
           key: jarvis-debug-keystore-v1
 
+      # A permanent key, once it has been added as a repository secret. Until then, the cached one.
       - name: Create signing key if needed
+        env:
+          JARVIS_KEYSTORE: ${{ secrets.JARVIS_KEYSTORE }}
         run: |
           mkdir -p ~/.android
+          if [ -n "$JARVIS_KEYSTORE" ]; then echo "$JARVIS_KEYSTORE" | base64 -d > ~/.android/debug.keystore; fi
           [ -f ~/.android/debug.keystore ] || keytool -genkeypair -v -keystore ~/.android/debug.keystore \
             -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
             -validity 10000 -dname "CN=Jarvis Debug,O=Jarvis,C=IN"
 
       - name: Build APK
         working-directory: mobile
+        env:
+          JARVIS_BUILD: ${{ github.run_number }}
         run: |
           mkdir -p ci-out
           set -o pipefail
@@ -67,6 +73,8 @@ jobs:
           chmod +x android/gradlew
           (cd android && ./gradlew assembleDebug --no-daemon --stacktrace) 2>&1 | tee -a ci-out/build.log
           cp android/app/build/outputs/apk/debug/app-debug.apk ci-out/jarvis.apk
+          # What the app checks to see whether a newer build exists (one more than the build number, see build.gradle).
+          echo "{\"versionCode\": $((JARVIS_BUILD + 1))}" > ci-out/version.json
 
       - name: Enable KVM for the emulator
         run: |

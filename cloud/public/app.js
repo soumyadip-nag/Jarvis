@@ -493,6 +493,30 @@
 
   // ───────── voice input ─────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // ───────── updates to the Android app itself (web changes need nothing, the app loads the live site) ─────────
+  let lastUpdateCheck = 0;
+  function checkForUpdate() {
+    if (!Native || Date.now() - lastUpdateCheck < 3600_000) return;
+    lastUpdateCheck = Date.now();
+    Native("checkUpdate")
+      .then((r) => { $("#update-banner").hidden = !r.available; })
+      .catch(() => {}); // older builds of the app, or no connection: try again next time
+  }
+
+  async function installUpdate() {
+    const banner = $("#update-banner");
+    banner.disabled = true;
+    banner.textContent = "Downloading the update…";
+    try {
+      await Native("installUpdate");
+      banner.textContent = "⬆ Update available: tap to install";
+    } catch (e) {
+      banner.textContent = e.message;
+    } finally {
+      banner.disabled = false;
+    }
+  }
+
   // ───────── experiment: can Jarvis talk on a normal call through the speaker? ─────────
   async function runCallTest() {
     const number = $("#call-test-number").value.trim();
@@ -768,6 +792,7 @@
     $("#device-name").textContent = "Phone";
     if (!reactor) reactor = new Reactor($("#reactor"));
     if (Native) refreshNativeContacts();
+    checkForUpdate();
     setState("booting", "Connecting");
     if (!chatEl().children.length) {
       const empty = document.createElement("div");
@@ -820,6 +845,7 @@
     });
     $("#memory-search").addEventListener("input", renderMemories);
 
+    $("#update-banner").onclick = installUpdate;
     renderContactsInfo();
     $("#import-contacts").onclick = importContacts;
     $("#clear-contacts").onclick = () => {
@@ -879,7 +905,7 @@
     $("#install").onclick = async () => { if (installPrompt) { installPrompt.prompt(); installPrompt = null; $("#install").hidden = true; } };
 
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) { lastActivity = Date.now(); if (token) sync(); }
+      if (!document.hidden) { lastActivity = Date.now(); if (token) sync(); checkForUpdate(); }
     });
 
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

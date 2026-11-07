@@ -43,4 +43,6 @@ console.log("call test:", await evaluate(
      new Promise((r) => setTimeout(() => r("no answer after 90s"), 90000)),
    ]).catch((e) => "ERROR " + e.message)`,
 ));
+console.log("checkUpdate:", await native("checkUpdate"));
+console.log("installUpdate:", await native("installUpdate")); // should end at Android's install prompt
 socket.close();

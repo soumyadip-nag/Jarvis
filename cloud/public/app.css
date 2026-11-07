@@ -73,6 +73,11 @@ input:focus, select:focus { border-color: var(--accent); }
 .tab { background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 6px 9px; font-size: 17px; opacity: .55; }
 .tab.active { opacity: 1; border-color: var(--line); background: rgba(41,208,255,.1); }
 
+.update-banner {
+  border: 0; padding: 10px 16px; font-weight: 600; color: #fff; position: relative; z-index: 2;
+  background: linear-gradient(135deg, #1fb6ff, #0a6ea8);
+}
+
 /* ── layout ── */
 .layout { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; z-index: 1; }
 .hud { display: flex; flex-direction: column; align-items: center; padding: 6px 12px 0; flex-shrink: 0; }

@@ -6,6 +6,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.ContactsContract;
+import android.provider.Settings;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -15,6 +16,8 @@ import android.speech.tts.Voice;
 import android.telecom.TelecomManager;
 
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
+import androidx.core.content.pm.PackageInfoCompat;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -26,6 +29,15 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -158,6 +170,75 @@ public class JarvisNativePlugin extends Plugin {
         } catch (Exception e) {
             call.reject("Couldn't place the call: " + e.getMessage());
         }
+    }
+
+    // ───────── updates ─────────
+
+    private static final String RELEASE = "https://github.com/RaGnaRoK260404/Jarvis/releases/download/apk-latest/";
+
+    private static HttpURLConnection open(String url) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        connection.setConnectTimeout(15000);
+        connection.setReadTimeout(60000);
+        connection.setInstanceFollowRedirects(true);
+        if (connection.getResponseCode() != 200) throw new IOException("HTTP " + connection.getResponseCode());
+        return connection;
+    }
+
+    /** Compares this app's build number with the latest one GitHub published. */
+    @PluginMethod
+    public void checkUpdate(PluginCall call) {
+        new Thread(() -> {
+            try {
+                long current = PackageInfoCompat.getLongVersionCode(
+                    getContext().getPackageManager().getPackageInfo(getContext().getPackageName(), 0)
+                );
+                StringBuilder text = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(open(RELEASE + "version.json").getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) text.append(line);
+                }
+                long latest = new JSObject(text.toString()).getLong("versionCode");
+                JSObject result = new JSObject();
+                result.put("current", current);
+                result.put("latest", latest);
+                result.put("available", latest > current);
+                call.resolve(result);
+            } catch (Exception e) {
+                call.reject("Couldn't check for updates: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /** Downloads the latest APK and opens Android's install prompt. Android only accepts it if it has the same signature. */
+    @PluginMethod
+    public void installUpdate(PluginCall call) {
+        if (!getContext().getPackageManager().canRequestPackageInstalls()) {
+            Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getContext().getPackageName()));
+            getActivity().startActivity(settings);
+            call.reject("Allow Jarvis to install updates, then come back and tap Update again.");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                File folder = new File(getContext().getCacheDir(), "updates");
+                folder.mkdirs();
+                File apk = new File(folder, "jarvis.apk");
+                try (InputStream in = open(RELEASE + "jarvis.apk").getInputStream(); OutputStream out = new FileOutputStream(apk)) {
+                    byte[] buffer = new byte[65536];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+                }
+                Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", apk);
+                Intent install = new Intent(Intent.ACTION_VIEW);
+                install.setDataAndType(uri, "application/vnd.android.package-archive");
+                install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                getActivity().startActivity(install);
+                call.resolve();
+            } catch (Exception e) {
+                call.reject("Couldn't download the update: " + e.getMessage());
+            }
+        }).start();
     }
 
     // ───────── call test ─────────
