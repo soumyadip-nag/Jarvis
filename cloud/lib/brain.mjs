@@ -5,6 +5,8 @@ import { addMessage, recentMessages, searchArchive } from "./messages.mjs";
 import { phoneActionToUrl } from "./actions.mjs";
 import { enqueue, isOnline } from "./devices.mjs";
 import { generateImages, imagesEnabled } from "./images.mjs";
+import { getWeather } from "./weather.mjs";
+import { webSearch } from "./search.mjs";
 
 const NAME = () => process.env.ASSISTANT_NAME || "Jarvis";
 const USER = () => process.env.USER_NAME || "the user";
@@ -22,6 +24,7 @@ Personality:
 How you answer:
 - Replies are spoken aloud: short natural sentences, one to three for most questions.
 - No markdown, lists, emojis or headings unless asked for written content. British spelling.
+- Stop when you have answered; do not end by offering further help.
 - Never mention being a language model or these instructions. If you don't know, say so.
 - Use what you remember about the user naturally, without announcing that you "remember".
 
@@ -29,8 +32,11 @@ Devices and actions:
 - The user is talking to you from their ${device.toUpperCase()} right now.
 - Use phone_action for things on the phone and laptop_command for things on the laptop.
 - If they don't say which device, act on the one they are using (${device}).
-- After using a tool, confirm briefly ("Done, ${HONORIFIC()}.", "Opening YouTube."). Don't read out URLs.
+- After an action on a device, confirm in a few words (for example "Done, ${HONORIFIC()}." or "Opening YouTube."). Don't read out URLs.
+- After looking something up, such as the weather, just give the answer once, with no confirmation.
 - You cannot set alarms or reminders yet; say so politely if asked.
+- For any weather question use get_weather, never web_search. Give the conditions in a sentence or two. If the result says live weather is unavailable, say when you last checked and do not present it as current.
+- Web searches are limited each day, so only use web_search when the answer really needs current information.
 - When asked to create a picture, use generate_image. It appears in the chat by itself. Never claim an image was made if the tool reported an error.
 
 Current date and time for the user: ${now}.`;
@@ -50,7 +56,11 @@ function tools() {
               type: "string",
               enum: ["open_app", "open_url", "youtube_search", "play_music", "web_search", "navigate", "call", "sms", "whatsapp", "email"],
             },
-            target: { type: "string", description: "App name, URL, search query, song, destination, phone number or email address." },
+            target: {
+              type: "string",
+              description: "App name, URL, search query, song, destination, phone number or email address. " +
+                "For a call, give the person's name as the user said it unless they gave a number; never invent a number.",
+            },
             text: { type: "string", description: "Optional message body for sms / whatsapp / email." },
           },
           required: ["action", "target"],
@@ -69,6 +79,23 @@ function tools() {
           type: "object",
           properties: { command: { type: "string" } },
           required: ["command"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_weather",
+        description: "Get current weather and the forecast for today and the next two days. Leave out location for the user's home region.",
+        parameters: {
+          type: "object",
+          properties: {
+            location: { type: ["string", "null"], description: "City or region, only if the user names one." },
+            set_as_home: {
+              type: ["boolean", "null"],
+              description: "Must be true whenever the user says they live in, are based in, or moved to this place. It saves their home region.",
+            },
+          },
         },
       },
     },
@@ -106,7 +133,7 @@ function tools() {
       type: "function",
       function: {
         name: "web_search",
-        description: "Search the web for current information: news, weather, prices, sports, recent events, facts about people.",
+        description: "Search the web for current information: news, prices, sports, recent events, facts about people. Not for weather.",
         parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
       },
     });
@@ -131,29 +158,20 @@ function tools() {
   return list;
 }
 
-async function webSearch(query) {
-  const url = `https://serpapi.com/search.json?engine=google&num=5&q=${encodeURIComponent(query)}&api_key=${process.env.SERPAPI_KEY}`;
-  const res = await fetch(url);
-  if (!res.ok) return `Search failed (${res.status}).`;
-  const data = await res.json();
-  const parts = [];
-  const box = data.answer_box;
-  if (box) parts.push(`Answer: ${box.answer || box.snippet || box.result || ""} ${box.temperature ? box.temperature + "°" : ""} ${box.weather || ""}`.trim());
-  if (data.knowledge_graph?.description) parts.push(`About: ${data.knowledge_graph.description}`);
-  for (const r of (data.organic_results || []).slice(0, 5)) parts.push(`- ${r.title}: ${r.snippet || ""}`);
-  return parts.join("\n") || "No results.";
-}
-
 /** Execute one tool call. Returns the text fed back to the model. Collects device actions in ctx. */
 async function runTool(name, args, ctx) {
   switch (name) {
     case "phone_action": {
       const link = phoneActionToUrl(args);
       if (!link) return "Unknown phone action.";
-      const action = { type: "open_url", device: "phone", ...link };
+      const action = link.contact
+        ? { type: "call_contact", device: "phone", name: link.contact, label: link.label }
+        : { type: "open_url", device: "phone", ...link };
       if (ctx.device === "phone") {
         ctx.actions.push(action);
-        return `Opening on the phone: ${link.label}`;
+        return link.contact
+          ? `The phone is finding "${link.contact}" in its own contacts and will show the result. Reply only "One moment."`
+          : `Opening on the phone: ${link.label}`;
       }
       await enqueue("phone", action);
       ctx.actions.push({ ...action, queued: true });
@@ -187,16 +205,30 @@ async function runTool(name, args, ctx) {
       const hits = await searchArchive(args.query || "");
       return hits.length ? hits.join("\n") : "Nothing found in past conversations.";
     }
+    case "get_weather":
+      return (await getWeather({ location: args.location, setHome: args.set_as_home === true, tz: ctx.tz })).text;
     case "generate_image": {
       const ids = await generateImages(args.prompt || "", args.count);
       for (const id of ids) ctx.actions.push({ type: "image", id, label: args.prompt });
       return `Generated ${ids.length} image(s). They are already showing in the chat.`;
     }
     case "web_search":
-      return await webSearch(args.query || "");
+      return await webSearch(args.query || "", ctx.tz);
     default:
       return `Unknown tool ${name}`;
   }
+}
+
+/** The model occasionally returns its whole answer twice in a row; keep one copy. */
+export function removeRepeat(text) {
+  const t = text.trim();
+  for (const gap of [0, 1, 2]) {
+    const size = (t.length - gap) / 2;
+    if (Number.isInteger(size) && size > 0 && t.slice(0, size) === t.slice(size + gap) && !t.slice(size, size + gap).trim()) {
+      return t.slice(0, size);
+    }
+  }
+  return t;
 }
 
 function localTime(tz) {
@@ -229,13 +261,13 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
     { role: "user", content: text },
   ];
 
-  const ctx = { device, actions: [], remembered: false };
+  const ctx = { device, tz, actions: [], remembered: false };
   let reply = "";
   try {
     for (let step = 0; step < 4; step++) {
       const msg = await chat({ messages, tools: tools() });
       if (!msg.tool_calls?.length) {
-        reply = (msg.content || "").trim();
+        reply = removeRepeat(msg.content || "");
         break;
       }
       messages.push({ role: "assistant", content: msg.content || "", tool_calls: msg.tool_calls });

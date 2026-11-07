@@ -15,6 +15,11 @@ export async function chat({ messages, tools, model = MODEL(), json = false, max
     headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  // The free tier limits tokens per minute for each model, so a busy minute can fall back to the smaller one.
+  if (res.status === 429 && model !== FAST_MODEL()) {
+    console.warn(`Groq rate limit on ${model}; using ${FAST_MODEL()}`);
+    return chat({ messages, tools, model: FAST_MODEL(), json, maxTokens, temperature });
+  }
   if (!res.ok) throw new Error(`Groq ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   return data.choices[0].message;

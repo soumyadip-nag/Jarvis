@@ -99,11 +99,11 @@ Return JSON: {"memories": ["..."]} (empty list if nothing is worth remembering).
 
 export async function extractAndStore({ userText, replyText, now, known = [] }) {
   try {
-    const msg = await chat({
+    const request = () => chat({
       model: FAST_MODEL(),
       json: true,
       temperature: 0.1,
-      maxTokens: 400,
+      maxTokens: 1000, // includes the model's reasoning, which can use most of a small budget
       messages: [
         { role: "system", content: EXTRACT_PROMPT },
         {
@@ -113,6 +113,7 @@ export async function extractAndStore({ userText, replyText, now, known = [] }) 
         },
       ],
     });
+    const msg = await request().catch(request); // JSON mode occasionally fails; one retry is usually enough
     const parsed = JSON.parse(msg.content || "{}");
     const memories = Array.isArray(parsed.memories) ? parsed.memories.slice(0, 6) : [];
     return await addMemories(memories, "auto");

@@ -107,6 +107,7 @@ input:focus, select:focus { border-color: var(--accent); }
 }
 .gen-image { display: block; margin-top: 8px; }
 .gen-image img { display: block; width: 100%; max-width: 420px; min-height: 80px; border-radius: 12px; border: 1px solid rgba(41,208,255,.3); }
+.call-options { display: flex; flex-wrap: wrap; gap: 6px; }
 .action.queued { border-style: dashed; color: var(--muted); }
 .empty { margin: auto; text-align: center; color: var(--muted); font-size: 13px; padding: 20px; }
 

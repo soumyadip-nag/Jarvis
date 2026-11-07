@@ -9,6 +9,7 @@ process.env.JARVIS_LOCAL_STORE = fs.mkdtempSync(path.join(os.tmpdir(), "jarvis-"
 process.env.JARVIS_PASSCODE = "correct horse battery staple";
 process.env.GROQ_API_KEY = "test";
 process.env.CohereAPIKey = "test";
+process.env.SERPAPI_KEY = "test";
 process.env.CLOUDFLARE_ACCOUNT_ID = "acct";
 process.env.CLOUDFLARE_API_TOKEN = "test";
 
@@ -19,8 +20,13 @@ const toolCall = (name, args) => ({
 });
 const say = (content) => ({ choices: [{ message: { role: "assistant", content } }] });
 const seenPrompts = [];
+const searches = [];
 
 globalThis.fetch = async (url, init) => {
+  if (String(url).includes("serpapi")) {
+    searches.push(String(url));
+    return new Response(JSON.stringify({ organic_results: [{ title: "Result", snippet: "Something happened" }] }));
+  }
   const body = JSON.parse(init.body);
   if (String(url).includes("cloudflare")) {
     if (body.prompt.includes("fail")) return new Response("nope", { status: 500 });
@@ -40,6 +46,10 @@ globalThis.fetch = async (url, init) => {
   const last = body.messages.at(-1);
   if (last.role === "tool") return new Response(JSON.stringify(say(`Done, sir. (${last.content})`)));
   const text = last.content.toLowerCase();
+  if (text.includes("busy minute") && body.model !== "openai/gpt-oss-20b") return new Response("slow down", { status: 429 });
+  if (text.includes("search for")) return new Response(JSON.stringify(toolCall("web_search", { query: "news" })));
+  if (text.includes("call ravi")) return new Response(JSON.stringify(toolCall("phone_action", { action: "call", target: "Ravi" })));
+  if (text.includes("say it twice")) return new Response(JSON.stringify(say("It is raining, sir.It is raining, sir.")));
   if (text.includes("draw a broken")) return new Response(JSON.stringify(toolCall("generate_image", { prompt: "fail" })));
   if (text.includes("draw")) return new Response(JSON.stringify(toolCall("generate_image", { prompt: "a lion", count: 2 })));
   if (text.includes("on my laptop")) return new Response(JSON.stringify(toolCall("laptop_command", { command: "open spotify" })));
@@ -137,6 +147,50 @@ test("a failed image is reported to the model, not faked", async () => {
   const { data } = await call("POST", "chat", { token: phone, body: { text: "Draw a broken thing" } });
   assert.equal(data.actions.length, 0);
   assert.match(data.reply.content, /Tool error/);
+});
+
+test("a rate limit on the main model falls back to the smaller one", async () => {
+  const { data } = await call("POST", "chat", { token: phone, body: { text: "This is a busy minute" } });
+  assert.equal(data.reply.content, "Very good, sir.");
+});
+
+test("an answer the model repeated word for word is only given once", async () => {
+  const { data } = await call("POST", "chat", { token: phone, body: { text: "Say it twice" } });
+  assert.equal(data.reply.content, "It is raining, sir.");
+});
+
+test("web search stops at 8 a day and tells the model why", async () => {
+  const { webSearch, SEARCH_DAILY_CAP } = await import("../lib/search.mjs");
+  assert.equal(SEARCH_DAILY_CAP, 8);
+  const before = searches.length;
+  for (let i = 0; i < SEARCH_DAILY_CAP; i++) {
+    assert.match(await webSearch("news", "Asia/Kolkata"), /Something happened/);
+  }
+  assert.equal(searches.length, before + 8);
+  assert.match(await webSearch("news", "Asia/Kolkata"), /limit of 8 web searches/);
+  assert.equal(searches.length, before + 8); // no ninth call was sent
+
+  const { data } = await call("POST", "chat", { token: phone, body: { text: "Search for the news", tz: "Asia/Kolkata" } });
+  assert.match(data.reply.content, /limit of 8 web searches/);
+  assert.equal(searches.length, before + 8);
+
+  const tomorrow = Date.now() + 86400_000;
+  assert.match(await webSearch("news", "Asia/Kolkata", tomorrow), /Something happened/);
+});
+
+test("calling a name sends only the name; the phone does the matching", async () => {
+  const { data } = await call("POST", "chat", { token: phone, body: { text: "Call Ravi" } });
+  assert.equal(data.actions[0].type, "call_contact");
+  assert.equal(data.actions[0].name, "Ravi");
+  assert.equal(data.actions[0].url, undefined);
+});
+
+test("asked from the laptop, a call is queued for the phone", async () => {
+  await call("POST", "chat", { token: laptop, body: { text: "Call Ravi" } });
+  const sync = await call("GET", "sync", { token: phone });
+  const command = sync.data.commands.find((c) => c.type === "call_contact");
+  assert.equal(command.name, "Ravi");
+  await call("POST", `commands/${command.id}/done`, { token: phone });
 });
 
 test("brute force is locked out", async () => {

@@ -19,6 +19,7 @@
   let lastTs = 0;
   let busy = false;
   let latestRequest = 0;
+  let contacts = store.get("contacts", []);
   let state = "booting";
   let lastActivity = Date.now();
   let syncTimer = null;
@@ -97,8 +98,74 @@
     return link;
   }
 
+  // ───────── calling: the phone's own contacts, kept only on this phone ─────────
+  const telUrl = (tel) => "tel:" + String(tel).replace(/[^\d+]/g, "");
+  const contactsFromPicker = (picked) => picked
+    .map((c) => ({ name: (c.name || [])[0] || "", tel: (c.tel || [])[0] || "" }))
+    .filter((c) => c.name && c.tel);
+
+  function renderContactsInfo() {
+    const supported = "contacts" in navigator && "select" in navigator.contacts;
+    $("#import-contacts").hidden = !supported;
+    $("#clear-contacts").hidden = !contacts.length;
+    $("#contacts-info").textContent = !supported
+      ? "This browser can't read your contacts. Use Chrome on your Pixel."
+      : contacts.length
+        ? `${contacts.length} imported. Numbers stay on this phone and are never uploaded. Import again to add more.`
+        : "Choose the people Jarvis can call. Numbers stay on this phone and are never uploaded.";
+  }
+
+  async function importContacts() {
+    try {
+      const picked = await navigator.contacts.select(["name", "tel"], { multiple: true });
+      const merged = new Map(contacts.map((c) => [c.name, c]));
+      for (const c of contactsFromPicker(picked)) merged.set(c.name, c);
+      contacts = [...merged.values()];
+      store.set("contacts", contacts);
+    } catch (e) {
+      systemMessage("Couldn't open your contacts: " + e.message);
+    }
+    renderContactsInfo();
+  }
+
+  function callLink(contact) {
+    const link = document.createElement("a");
+    link.className = "action";
+    link.href = telUrl(contact.tel);
+    link.textContent = `📞 ${contact.name}`;
+    return link;
+  }
+
+  function callEl(a) {
+    const box = document.createElement("div");
+    box.className = "call-options";
+    const matches = JarvisContacts.rank(a.name, contacts);
+    for (const contact of matches) box.append(callLink(contact));
+    if (!matches.length && "contacts" in navigator) {
+      const choose = document.createElement("button");
+      choose.className = "action";
+      choose.textContent = "📇 Choose from contacts";
+      choose.onclick = async () => {
+        const [contact] = contactsFromPicker(await navigator.contacts.select(["name", "tel"]).catch(() => []));
+        if (contact) { box.replaceChildren(callLink(contact)); openUrl(telUrl(contact.tel)); }
+      };
+      box.append(choose);
+    }
+    return box;
+  }
+
+  /** What Jarvis should say for a call, on this phone, where the match is actually known. */
+  function callOutcome(name) {
+    const matches = JarvisContacts.rank(name, contacts);
+    const best = JarvisContacts.bestMatch(matches);
+    if (best) return { contact: best, say: `Calling ${best.name}.` };
+    if (matches.length) return { say: `I found more than one match for ${name}, sir. Which one?` };
+    return { say: `I can't find ${name} in your imported contacts, sir.` };
+  }
+
   function actionEl(a) {
     if (a.type === "image") return imageEl(a);
+    if (a.type === "call_contact" && !a.queued) return callEl(a);
     if (a.type === "open_url" && !a.queued) {
       const link = document.createElement("a");
       link.className = "action";
@@ -160,7 +227,13 @@
       const w = window.open(url, "_blank", "noopener");
       if (w) return;
     }
-    window.location.href = url;
+    // Dialler, SMS and app links: a real link click also works for Android's handling of tel:.
+    const link = document.createElement("a");
+    link.href = url;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
   }
 
   // ───────── voice output ─────────
@@ -259,7 +332,11 @@
       seen.add(data.user.id);
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
+      const call = data.actions.find((a) => a.type === "call_contact" && !a.queued);
+      const outcome = call && callOutcome(call.name);
+      if (outcome) data.reply.content = outcome.say;
       renderMessage(data.reply, { typewriter: true });
+      if (outcome?.contact && settings.autoOpen) openUrl(telUrl(outcome.contact.tel));
       const toOpen = data.actions.filter((a) => a.type === "open_url" && !a.queued);
       if (settings.autoOpen && toOpen.length) openUrl(toOpen[0].url);
       await speak(data.reply.content);
@@ -297,6 +374,11 @@
         });
         navigator.vibrate?.(120);
         if (settings.autoOpen) openUrl(cmd.url);
+      } else if (cmd.type === "call_contact") {
+        const outcome = callOutcome(cmd.name);
+        renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${outcome.say}`, actions: [cmd] });
+        navigator.vibrate?.(120);
+        if (outcome.contact && settings.autoOpen) openUrl(telUrl(outcome.contact.tel));
       }
     } finally {
       await api(`commands/${cmd.id}/done`, { method: "POST" }).catch(() => {});
@@ -383,6 +465,8 @@
   function logout() {
     token = null;
     store.del("token");
+    store.del("contacts");
+    contacts = [];
     clearTimeout(syncTimer);
     $("#app").hidden = true;
     $("#login").hidden = false;
@@ -445,6 +529,15 @@
       loadMemories();
     });
     $("#memory-search").addEventListener("input", renderMemories);
+
+    renderContactsInfo();
+    $("#import-contacts").onclick = importContacts;
+    $("#clear-contacts").onclick = () => {
+      if (!confirm("Forget the contacts imported on this phone?")) return;
+      contacts = [];
+      store.del("contacts");
+      renderContactsInfo();
+    };
 
     // settings
     loadVoices();

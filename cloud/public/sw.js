@@ -1,6 +1,6 @@
 // Caches the app shell so Jarvis opens instantly; API calls always go to the network.
-const CACHE = "jarvis-v1";
-const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/reactor.js", "/manifest.webmanifest", "/icons/icon-192.png"];
+const CACHE = "jarvis-v2";
+const SHELL = ["/", "/index.html", "/app.css", "/app.js", "/reactor.js", "/contacts.js", "/manifest.webmanifest", "/icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

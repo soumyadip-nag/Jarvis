@@ -50,7 +50,8 @@ export function phoneActionToUrl({ action, target = "", text = "" }) {
     case "navigate":
       return { url: `https://www.google.com/maps/dir/?api=1&destination=${q(t)}`, label: `Directions to ${t}` };
     case "call":
-      return { url: `tel:${digits(t)}`, label: digits(t) ? `Call ${t}` : "Open dialler" };
+      if (t && !/^[+\d][\d\s()-]{2,}$/.test(t)) return { contact: t, label: `Call ${t}` }; // a name: the phone looks it up
+      return { url: `tel:${digits(t)}`, label: t ? `Call ${t}` : "Open dialler" };
     case "sms":
       return { url: `sms:${digits(t)}${text ? `?body=${q(text)}` : ""}`, label: `Text ${t}` };
     case "whatsapp":

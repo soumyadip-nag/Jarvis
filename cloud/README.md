@@ -21,7 +21,7 @@ conversation, one memory and can send commands to each other.
 | `JARVIS_PASSCODE` | ✅ | Your login passcode. Make it long (a sentence works well). |
 | `GROQ_API_KEY` | ✅ | AI replies and tool use |
 | `CohereAPIKey` | recommended | Smarter memory recall (semantic search). Without it, keyword matching is used. |
-| `SERPAPI_KEY` | optional | Live web search (news, weather, scores…) |
+| `SERPAPI_KEY` | optional | Live web search (news, scores, prices…), capped at 8 searches a day |
 | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` | optional | Image generation (free daily allowance). The token needs the **Workers AI** permission. |
 | `USER_NAME` | optional | Your name, used in Jarvis's personality |
 | `HONORIFIC` | optional | `sir` (default), `ma'am`, … |
@@ -58,10 +58,39 @@ The footer shows **● PHONE ONLINE** when both are connected.
   "play lo-fi on my phone" (from the laptop) pops up on the phone. Commands wait up to 24 hours
   if the other device is offline.
 
+## Weather
+
+Weather uses [Open-Meteo](https://open-meteo.com), which is free for private, non-commercial use and
+needs no key. Tell Jarvis where you live once ("I live in Kolkata") and it saves that as your home region.
+
+- An hourly job checks the home region up to 5 times a day (about 6am, 10am, 2pm, 6pm and 10pm), so a
+  report is ready and major changes get noticed.
+- A question uses a reading under 15 minutes old, otherwise it checks live. There is no daily cap.
+- If a check fails, Jarvis tells you what it was the last time it checked.
+- A major change (rain or a storm starting or stopping, a swing of 8°C, strong wind) posts a message
+  in the shared chat. You see it the next time the app is open; it is not a phone notification.
+
+Open-Meteo's free limits are 10,000 calls a day and 600 a minute, and shared cloud addresses such as
+Netlify's may be limited sooner. The data is CC BY 4.0, so the settings screen credits Open-Meteo.
+
+## Web search
+
+SerpAPI's free plan allows 250 searches a month, so Jarvis stops at 8 a day (250/30). After that it says
+the limit has been reached until the next day. Weather never uses a search.
+
 ## Images
 
 Ask for a picture on either device. It appears in the phone chat (tap to save) and opens on the
 laptop. Images are stored privately and can only be fetched by a signed-in device.
+
+## Calling
+
+In Settings, import the people Jarvis can call. Their numbers stay on the phone: the AI and the server
+only receive the name you said. "Call Ravi" finds the closest match and opens the dialler with the number,
+and you tap Call. If two people match, Jarvis asks which one.
+
+A web app can't read WhatsApp's contacts, see contacts you haven't imported, or place a call by itself.
+Those would need a native Android app.
 
 ## Phone actions
 
