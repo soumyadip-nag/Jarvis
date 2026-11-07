@@ -16,6 +16,7 @@ import json
 import os
 import queue
 import re
+import subprocess
 import time
 import urllib.request
 import wave
@@ -44,6 +45,33 @@ NO_SPEECH_SECONDS = 10
 ECHO_SECONDS = 0.3         # What's heard straight after Jarvis stops is ignored, in case it's its own echo.
 START_SECONDS = 1.5        # The call's audio takes a moment to start, and the first second can be lost.
 RING_SECONDS = 60          # How long to wait for someone to answer.
+DIAL_SECONDS = 15          # How long Phone Link gets to show the number.
+PRESS_CALL_RESULTS = {0: "pressed", 2: "not found", 3: "wrong number", 4: "would press"}
+PRESS_CALL_SCRIPT = r"""
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$A = [System.Windows.Automation.AutomationElement]
+$byName = New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, 'Phone Link')
+$byId = New-Object System.Windows.Automation.PropertyCondition($A::AutomationIdProperty, 'ButtonCall')
+$result = 2
+$deadline = (Get-Date).AddSeconds(15)
+while ((Get-Date) -lt $deadline) {
+    $window = $A::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children, $byName)
+    if ($window) {
+        $button = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $byId)
+        if ($button) {
+            $digits = $button.Current.Name -replace '\D', ''
+            if ($digits.EndsWith($env:JARVIS_DIAL_DIGITS)) {
+                if ($env:JARVIS_DIAL_PRESS -ne '1') { exit 4 }
+                $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+                exit 0
+            }
+            $result = 3
+        }
+    }
+    Start-Sleep -Milliseconds 400
+}
+exit $result
+"""
 AUDIO_START_SECONDS = 25   # The call's audio devices may not be usable until the call is under way.
 # Ringing and caller tunes are as loud as speech, so an answer only counts once a greeting is recognised.
 GREETING = re.compile(r"\b(hello|hallo|helo|hi|hey|haan|han|ji|yes|yeah|speaking|who|kaun|ke|bolo|boliye)\b", re.I)
@@ -356,12 +384,34 @@ def wait_for_answer(call, heard_words):
     return False
 
 
+def press_call(number, press=True):
+    """Presses Call in Phone Link, which opens with the number filled in but doesn't dial it by itself.
+
+    It only presses if the button shows this number, so it can never ring someone else. Returns "pressed" (or
+    "would press" when told not to press), "wrong number" or "not found".
+    """
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", PRESS_CALL_SCRIPT],
+        env={**os.environ, "JARVIS_DIAL_DIGITS": re.sub(r"\D", "", number)[-10:], "JARVIS_DIAL_PRESS": "1" if press else "0"},
+        capture_output=True, text=True, timeout=DIAL_SECONDS + 15,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if result.returncode not in PRESS_CALL_RESULTS:
+        print(f"Pressing Call failed: {result.stderr.strip()[-300:]}")
+    return PRESS_CALL_RESULTS.get(result.returncode, "not found")
+
+
 def dial(number):
     """Asks Phone Link to call a number. It's the app registered for tel: links."""
     try:
         os.startfile(f"tel:{number}")
     except OSError as e:
-        raise CallFailed(f"Phone Link wouldn't start the call ({e}).") from None
+        raise CallFailed(f"I didn't start the call, because Phone Link wouldn't open ({e}).") from None
+    outcome = press_call(number)
+    print(f"Pressing Call: {outcome}")
+    if outcome != "pressed":
+        reason = "it was showing a different number" if outcome == "wrong number" else "I couldn't find its Call button"
+        raise CallFailed(f"I opened Phone Link but didn't press Call, because {reason}. Nobody was rung.")
 
 
 def run_call(goal, number=None):
