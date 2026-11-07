@@ -16,3 +16,4 @@ pedalboard
 AppOpener
 pywhatkit
 keyboard
+sounddevice

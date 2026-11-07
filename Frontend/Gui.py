@@ -13,10 +13,20 @@ The backend runs on a worker QThread and talks to the UI only through Qt signals
 """
 import datetime
 import math
+import os
 import random
 import sys
 import threading
 import time
+
+# PyQt5 ships a very old msvcp140.dll. If it loads first, pedalboard (the voice effects) crashes the whole app
+# on Windows, because it needs a newer one. Windows' own copy has to be loaded before PyQt5 is imported.
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.WinDLL(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "msvcp140.dll"))
+    except OSError as e:
+        print(f"Couldn't load Windows' C++ runtime, so voice effects may crash: {e}")
 
 from PyQt5.QtCore import Qt, QTimer, QThread, QObject, QPointF, QRectF, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import (
