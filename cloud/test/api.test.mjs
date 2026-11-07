@@ -21,6 +21,7 @@ const toolCall = (name, args) => ({
 const say = (content) => ({ choices: [{ message: { role: "assistant", content } }] });
 const seenPrompts = [];
 const searches = [];
+let hiccuped = false;
 
 globalThis.fetch = async (url, init) => {
   if (String(url).includes("serpapi")) {
@@ -44,11 +45,28 @@ globalThis.fetch = async (url, init) => {
   }
   seenPrompts.push(body.messages);
   const last = body.messages.at(-1);
+  if (last.role === "system" && last.content.includes("Give your final answer")) {
+    // Groq rejects this request if tool calls are still in the history.
+    assert.ok(!body.tools && !body.messages.some((m) => m.tool_calls || m.role === "tool"));
+    assert.ok(!body.messages[0].content.includes("phone_action"));
+    if (body.messages.findLast((m) => m.role === "user").content === "Hiccup" && !hiccuped) {
+      hiccuped = true;
+      return new Response('{"error":{"code":"tool_use_failed"}}', { status: 400 });
+    }
+    return new Response(JSON.stringify(say(last.content.includes("limit of 8") ? `Done, sir. (${last.content})` : "Here is what I found, sir.")));
+  }
   if (last.role === "tool") return new Response(JSON.stringify(say(`Done, sir. (${last.content})`)));
   const text = last.content.toLowerCase();
   if (text.includes("busy minute") && body.model !== "openai/gpt-oss-20b") return new Response("slow down", { status: 429 });
   if (text.includes("search for")) return new Response(JSON.stringify(toolCall("web_search", { query: "news" })));
   if (text.includes("call ravi")) return new Response(JSON.stringify(toolCall("phone_action", { action: "call", target: "Ravi" })));
+  if (text === "hiccup") return new Response(JSON.stringify(toolCall("web_search", { query: "x" })));
+  if (text.includes("keep searching")) {
+    // A model that would search forever if it were allowed to.
+    if (body.tools?.some((t) => t.function.name === "web_search")) return new Response(JSON.stringify(toolCall("web_search", { query: "again" })));
+    return new Response(JSON.stringify(say("Here is what I found, sir.")));
+  }
+  if (text.includes("leak please")) return new Response(JSON.stringify(say("It is 25 degrees, sir.\n\nWe need to check the tool output again.")));
   if (text.includes("say it twice")) return new Response(JSON.stringify(say("It is raining, sir.It is raining, sir.")));
   if (text.includes("draw a broken")) return new Response(JSON.stringify(toolCall("generate_image", { prompt: "fail" })));
   if (text.includes("draw")) return new Response(JSON.stringify(toolCall("generate_image", { prompt: "a lion", count: 2 })));
@@ -191,6 +209,29 @@ test("asked from the laptop, a call is queued for the phone", async () => {
   const command = sync.data.commands.find((c) => c.type === "call_contact");
   assert.equal(command.name, "Ravi");
   await call("POST", `commands/${command.id}/done`, { token: phone });
+});
+
+test("a question can only use one web search, then has to answer", async () => {
+  const before = searches.length;
+  const { data } = await call("POST", "chat", { token: laptop, body: { text: "Keep searching", tz: "Pacific/Auckland" } });
+  assert.equal(searches.length, before + 1);
+  assert.equal(data.reply.content, "Here is what I found, sir.");
+});
+
+test("a tool call attempted during the final answer is retried", async () => {
+  const { data } = await call("POST", "chat", { token: laptop, body: { text: "Hiccup", tz: "Pacific/Auckland" } });
+  assert.equal(hiccuped, true);
+  assert.equal(data.reply.content, "Here is what I found, sir.");
+});
+
+test("leaked reasoning never reaches the reply", async () => {
+  const { cleanReply } = await import("../lib/brain.mjs");
+  const { data } = await call("POST", "chat", { token: phone, body: { text: "Leak please" } });
+  assert.equal(data.reply.content, "It is 25 degrees, sir.");
+  assert.equal(cleanReply("Rain today.\n\n...\n\n\u200b … …\n\nProbably the search failed."), "Rain today.");
+  assert.equal(cleanReply("We need to search again."), "");
+  assert.equal(cleanReply("Maybe take an umbrella? It is raining."), "");
+  assert.equal(cleanReply("Two paragraphs here.\n\nBoth are fine."), "Two paragraphs here.\n\nBoth are fine.");
 });
 
 test("brute force is locked out", async () => {

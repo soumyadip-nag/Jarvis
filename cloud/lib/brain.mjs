@@ -12,6 +12,33 @@ const NAME = () => process.env.ASSISTANT_NAME || "Jarvis";
 const USER = () => process.env.USER_NAME || "the user";
 const HONORIFIC = () => process.env.HONORIFIC || "sir";
 
+const MAX_STEPS = 4;
+const ANSWER_NOW = "Give your final answer to the user now, in one to three short spoken sentences. " +
+  "You have no tools available and cannot search again. If results are listed above, report the most relevant of them, " +
+  "even if they are not a perfect match. If a tool failed or returned nothing useful, say that plainly. " +
+  "Do not describe your reasoning.";
+
+/**
+ * The conversation with tool calls turned into plain text. Groq rejects a request with no tools if the
+ * model tries to call one, and it will try if it can see earlier tool calls.
+ */
+async function finalAnswer(messages, temperature) {
+  const results = messages.filter((m) => m.role === "tool").map((m) => m.content);
+  const plain = [
+    ...messages
+      .filter((m) => m.role !== "tool" && !m.tool_calls)
+      // Tool names in the instructions tempt the model to call them, even with none on offer.
+      .map((m, i) => (i === 0 ? { ...m, content: m.content.replace(/Devices and actions:[\s\S]*?(?=Current date)/, "") } : m)),
+    { role: "system", content: `${results.length ? `What your tools returned:\n${results.join("\n\n")}\n\n` : ""}${ANSWER_NOW}` },
+  ];
+  const ask = () => chat({ messages: plain, temperature });
+  const msg = await ask().catch((e) => {
+    if (e.message.includes("tool_use_failed")) return ask(); // it tried to call a tool anyway; usually fine the second time
+    throw e;
+  });
+  return cleanReply(msg.content);
+}
+
 function persona(device, now) {
   return `You are ${NAME()}, the personal AI assistant of ${USER()}. You run on their phone and laptop, which share one memory.
 
@@ -213,6 +240,7 @@ async function runTool(name, args, ctx) {
       return `Generated ${ids.length} image(s). They are already showing in the chat.`;
     }
     case "web_search":
+      ctx.searched = true;
       return await webSearch(args.query || "", ctx.tz);
     default:
       return `Unknown tool ${name}`;
@@ -229,6 +257,21 @@ export function removeRepeat(text) {
     }
   }
   return t;
+}
+
+const REASONING = /^(we need|we should|we must|we have|need to|the user (asked|wants|said)|the output|probably|let me|let's|i need to|i should|maybe|wait,|but we|so we|now we|according to|the tool)\b/i;
+
+/**
+ * This model sometimes puts its private reasoning or filler into the answer, and replies are read aloud.
+ * Keeps the paragraphs before any reasoning and drops those with no words. May return "".
+ */
+export function cleanReply(text) {
+  const kept = [];
+  for (const paragraph of String(text || "").replace(/[\u200b-\u200f\u2060\ufeff]/g, "").split(/\n\s*\n/)) {
+    if (REASONING.test(paragraph.trim())) break;
+    if (/\p{L}{2}/u.test(paragraph)) kept.push(paragraph.trim());
+  }
+  return removeRepeat(kept.join("\n\n"));
 }
 
 function localTime(tz) {
@@ -264,10 +307,16 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
   const ctx = { device, tz, actions: [], remembered: false };
   let reply = "";
   try {
-    for (let step = 0; step < 4; step++) {
+    for (let step = 0; step < MAX_STEPS; step++) {
+      // One search per question, then it has to answer: each search uses up the daily allowance.
+      const answerOnly = ctx.searched || step === MAX_STEPS - 1;
+      if (answerOnly) {
+        reply = await finalAnswer(messages, 0.3);
+        break;
+      }
       const msg = await chat({ messages, tools: tools() });
       if (!msg.tool_calls?.length) {
-        reply = removeRepeat(msg.content || "");
+        reply = cleanReply(msg.content);
         break;
       }
       messages.push({ role: "assistant", content: msg.content || "", tool_calls: msg.tool_calls });
@@ -279,6 +328,9 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
         catch (e) { result = `Tool error: ${e.message}`; }
         messages.push({ role: "tool", tool_call_id: call.id, content: String(result).slice(0, 4000) });
       }
+    }
+    if (!reply && !ctx.actions.length) {
+      reply = await finalAnswer(messages, 0.2);
     }
   } catch (e) {
     console.error("chat failed:", e);

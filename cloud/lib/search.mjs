@@ -28,9 +28,9 @@ export async function webSearch(query, tz, now = Date.now()) {
   try {
     res = await fetch(url, { signal: AbortSignal.timeout(8000) });
   } catch {
-    return "Search failed: the search service did not respond.";
+    return "Search failed: the search service did not respond. Tell the user the search did not work; do not guess at current facts.";
   }
-  if (!res.ok) return `Search failed (${res.status}).`;
+  if (!res.ok) return `Search failed (${res.status}). Tell the user the search did not work; do not guess at current facts.`;
   const data = await res.json();
   const parts = [];
   const box = data.answer_box;
