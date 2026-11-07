@@ -37,12 +37,17 @@
     return Math.max(similarity(q, n), average * 0.95);
   }
 
+  const lastDigits = (tel) => String(tel || "").replace(/\D/g, "").slice(-10);
+  const sameNumber = (a, b) => !!lastDigits(a) && lastDigits(a) === lastDigits(b);
+
   /** Closest contacts first: [{ name, tel, score }]. */
   function rank(query, contacts, limit = 3) {
     return (contacts || [])
       .map((c) => ({ ...c, score: score(query, c.name) }))
       .filter((c) => c.score >= 0.6)
       .sort((a, b) => b.score - a.score)
+      // The same person saved twice (Google, SIM, WhatsApp) has one number, so it isn't a real choice.
+      .filter((c, i, list) => list.findIndex((other) => sameNumber(other.tel, c.tel)) === i)
       .slice(0, limit);
   }
 

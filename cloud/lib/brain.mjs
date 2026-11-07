@@ -62,6 +62,7 @@ Devices and actions:
 - After an action on a device, confirm in a few words (for example "Done, ${HONORIFIC()}." or "Opening YouTube."). Don't read out URLs.
 - After looking something up, such as the weather, just give the answer once, with no confirmation.
 - You cannot set alarms or reminders yet; say so politely if asked.
+- Whenever asked to call someone, always use phone_action with action "call" and their name as the target. The phone looks up its own contacts, so you never need their number. Never say you don't have a number, even if an earlier call in this conversation went differently.
 - For any weather question use get_weather, never web_search. Give the conditions in a sentence or two. If the result says live weather is unavailable, say when you last checked and do not present it as current.
 - Web searches are limited each day, so only use web_search when the answer really needs current information.
 - When asked to create a picture, use generate_image. It appears in the chat by itself. Never claim an image was made if the tool reported an error.
@@ -198,7 +199,9 @@ async function runTool(name, args, ctx) {
         ctx.actions.push(action);
         return link.contact
           ? `The phone is finding "${link.contact}" in its own contacts and will show the result. Reply only "One moment."`
-          : `Opening on the phone: ${link.label}`;
+          : link.url.startsWith("tel:") && link.url.length > 4
+            ? `The phone is calling ${args.target}. Reply only "Calling ${args.target}, ${HONORIFIC()}."`
+            : `Opening on the phone: ${link.label}`;
       }
       await enqueue("phone", action);
       ctx.actions.push({ ...action, queued: true });

@@ -117,14 +117,28 @@
     renderContactsInfo();
   }
 
+  /** In the app: a real call. If Android refuses, say why and open the dialler instead of failing silently. */
+  function callNow(number) {
+    return Native("call", { number }).catch((e) => {
+      systemMessage(`I couldn't place the call directly: ${e.message} Check that Jarvis has the Phone permission in Android's app settings.`);
+      openUrl(telUrl(number));
+    });
+  }
+
   /** Calling by voice on the phone: direct in the app unless confirmation is on; the dialler in a browser. */
   function placeCall(contact) {
-    const dial = () => openUrl(telUrl(contact.tel));
     if (Native) {
-      if (!settings.confirmCalls) Native("call", { number: contact.tel }).catch(dial);
+      if (!settings.confirmCalls) return callNow(contact.tel);
     } else if (settings.autoOpen) {
-      dial();
+      openUrl(telUrl(contact.tel));
     }
+  }
+
+  /** Says it first, then calls: the call takes over the phone's audio and would cut the words off. */
+  async function announceAndCall(words, call) {
+    await Promise.race([speak(words), new Promise((resolve) => setTimeout(resolve, 6000))]);
+    stopSpeaking();
+    await call();
   }
 
   function renderContactsInfo() {
@@ -162,6 +176,13 @@
     link.className = "action";
     link.href = telUrl(contact.tel);
     link.textContent = `📞 ${contact.name}`;
+    if (Native) {
+      // A tap is already a decision, so call rather than opening the dialler to tap again.
+      link.onclick = (e) => {
+        e.preventDefault();
+        callNow(contact.tel);
+      };
+    }
     return link;
   }
 
@@ -187,7 +208,7 @@
   function callOutcome(name) {
     const matches = JarvisContacts.rank(name, contacts);
     const best = JarvisContacts.bestMatch(matches);
-    if (best) return { contact: best, say: `Calling ${best.name}.` };
+    if (best) return { contact: best, say: `Calling ${best.name}, sir.` };
     if (matches.length) return { say: `I found more than one match for ${name}, sir. Which one?` };
     return { say: `I can't find ${name} in your imported contacts, sir.` };
   }
@@ -591,7 +612,19 @@
         data.reply.content = outcome.contact && Native && settings.confirmCalls ? `Tap to call ${outcome.contact.name}.` : outcome.say;
       }
       renderMessage(data.reply, { typewriter: true });
-      if (outcome?.contact) placeCall(outcome.contact);
+      if (outcome?.contact) {
+        if (Native && !settings.confirmCalls) {
+          await announceAndCall(outcome.say, () => placeCall(outcome.contact));
+          return;
+        }
+        placeCall(outcome.contact);
+      }
+      // A number said out loud is also a call to place, not a dialler to open.
+      const spokenNumber = Native && !settings.confirmCalls && data.actions.find((a) => a.type === "open_url" && !a.queued && a.url.startsWith("tel:") && a.url.length > 4);
+      if (spokenNumber) {
+        await announceAndCall(data.reply.content, () => callNow(spokenNumber.url.slice(4)));
+        return;
+      }
       const toOpen = data.actions.filter((a) => a.type === "open_url" && !a.queued);
       if (settings.autoOpen && toOpen.length) openUrl(toOpen[0].url);
       await speak(data.reply.content);

@@ -32,6 +32,20 @@ test("two people with the same first name are not guessed", () => {
   assert.equal(best("Ravi Shah"), "Ravi Shah");
 });
 
+test("the same person saved twice isn't treated as two people", () => {
+  const saved = [
+    { name: "Ankita Sen", tel: "+91 98000 00007" },
+    { name: "Ankita Sen", tel: "098000-00007" },
+    { name: "Ankita", tel: "9800000007" },
+  ];
+  const matches = rank("Ankita", saved);
+  assert.equal(matches.length, 1);
+  assert.ok(bestMatch(matches));
+  // Two different people with the same name still need asking.
+  const twoPeople = [{ name: "Ankita Sen", tel: "9800000007" }, { name: "Ankita Roy", tel: "9800000008" }];
+  assert.equal(bestMatch(rank("Ankita", twoPeople)), null);
+});
+
 test("a name nobody has finds nothing", () => {
   assert.deepEqual(rank("Zebediah", contacts), []);
   assert.equal(best("Zebediah"), null);
