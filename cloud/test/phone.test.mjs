@@ -129,6 +129,18 @@ test("simple controls still work when locked", async () => {
   assert.deepEqual(data.actions.map((a) => a.control), ["torch_on"]);
 });
 
+test("a voice the phone didn't recognise gets the same limits, with its own note", async () => {
+  const inbox = "- 2 on WhatsApp from Mom, newest 3 min ago\n";
+  const { data } = await chat(phone, "reply to Rahul saying hi", { notifications: inbox, guest: true });
+  assert.equal(data.actions.length, 0);
+  assert.ok(!lastTools.includes("reply_message"));
+  assert.ok(lastPrompt.some((m) => m.role === "system" && m.content.includes("did not recognise this voice")));
+  assert.ok(!lastPrompt.some((m) => m.content.includes("The phone is LOCKED")));
+  assert.ok(!JSON.stringify(lastPrompt).includes("locker code"), "no chat history");
+  assert.ok(!JSON.stringify(lastPrompt).includes("from Mom"), "no messages");
+  assert.equal(data.user.content, "❔ reply to Rahul saying hi");
+});
+
 test("only a real true counts as locked", async () => {
   await chat(phone, "who messaged me", { locked: "no" });
   assert.ok(lastTools.includes("reply_message"));

@@ -40,8 +40,9 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
   await touch(device);
 
   if (route === "POST /chat") {
-    const { text, tz, voice: wantsVoice, notifications, locked: lockedFlag } = await body(req);
+    const { text, tz, voice: wantsVoice, notifications, locked: lockedFlag, guest: guestFlag } = await body(req);
     const locked = lockedFlag === true;
+    const guest = guestFlag === true; // the phone's voice ID didn't recognise the speaker
     if (!text || typeof text !== "string" || text.length > 4000) return json({ error: "Invalid text" }, 400);
     const defer = (promise) => (context?.waitUntil ? context.waitUntil(promise) : promise);
     if ((req.headers.get("accept") || "").includes("text/event-stream")) {
@@ -63,7 +64,7 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
             }
           };
           try {
-            event("done", await respond({ text: text.trim(), device, tz, defer, onSentence, notifications, locked }));
+            event("done", await respond({ text: text.trim(), device, tz, defer, onSentence, notifications, locked, guest }));
             await Promise.all(voiced);
           } catch (e) {
             console.error("chat failed:", e);
@@ -75,7 +76,7 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
       });
       return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
     }
-    return json(await respond({ text: text.trim(), device, tz, defer, notifications, locked }));
+    return json(await respond({ text: text.trim(), device, tz, defer, notifications, locked, guest }));
   }
 
   if (route === "GET /sync") {

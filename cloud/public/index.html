@@ -104,6 +104,17 @@
           </label>
           <button id="wake-test" class="ghost">Test my voice</button>
           <p class="muted small-text" id="wake-test-result"></p>
+          <label>Voice ID</label>
+          <p class="muted small-text" id="voice-status"></p>
+          <button id="voice-setup" class="ghost">Set up my voice</button>
+          <button id="voice-remove" class="ghost" hidden>Remove my voice</button>
+          <label>Voice match
+            <select id="voice-strictness">
+              <option value="relaxed">Relaxed: fewer times I mistake you for a guest</option>
+              <option value="normal">Normal</option>
+              <option value="strict">Strict: harder for others to pass as you</option>
+            </select>
+          </label>
           <button id="wake-overlay" class="ghost" hidden>Let Jarvis open apps (alarms, timers, calls, links)</button>
         </div>
         <div class="setting" id="inbox-row" hidden>

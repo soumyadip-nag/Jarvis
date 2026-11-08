@@ -79,11 +79,15 @@ Devices and actions:
 Current date and time for the user: ${now}.`;
 }
 
-// With the phone locked, whoever is speaking may not be the user: only these, which reveal and change nothing personal.
+// With the phone locked, or a voice the phone didn't recognise as the user's, whoever is speaking may not be the user:
+// only these, which reveal and change nothing personal.
 export const LOCKED_TOOLS = new Set(["get_weather", "web_search", "phone_control", "generate_image"]);
-const LOCKED_NOTE = "The phone is LOCKED, so the person speaking may not be the user. Answer general questions and use the tools you have, " +
-  "but share nothing personal: you have no access to their memories, messages, contacts or chat history right now. " +
-  "For anything personal, or to send messages, make calls or do tasks in apps, say politely that they need to unlock the phone first.";
+const RESTRICTED = "Answer general questions and use the tools you have, but share nothing personal: you have no access to " +
+  "the user's memories, messages, contacts or chat history right now.";
+const LOCKED_NOTE = `The phone is LOCKED, so the person speaking may not be the user. ${RESTRICTED} ` +
+  "For anything personal, or to send messages or make calls, say politely that they need to unlock the phone first.";
+const GUEST_NOTE = `The phone did not recognise this voice as the user's, so you may be talking to someone else. ${RESTRICTED} ` +
+  "For anything personal, or to send messages or make calls, say politely that you only do that for the user. Don't mention voice ID unless asked.";
 
 function tools(locked = false) {
   const list = [
@@ -439,17 +443,19 @@ function sentenceStream(onSentence) {
   };
 }
 
-export async function respond({ text, device, tz, defer = (p) => p, onSentence, notifications, locked = false }) {
+export async function respond({ text, device, tz, defer = (p) => p, onSentence, notifications, locked: phoneLocked = false, guest = false }) {
   const spoken = sentenceStream(onSentence);
+  // Either way, nothing personal; `locked` below means that.
+  const locked = phoneLocked || guest;
   const now = localTime(tz);
   // A locked phone gets nothing personal: no chat history, memories or messages (see LOCKED_TOOLS).
   const history = locked ? [] : (await recentMessages()).slice(-RECENT_MESSAGES);
-  const userMsg = await addMessage({ role: "user", content: locked ? `🔒 ${text}` : text, device });
+  const userMsg = await addMessage({ role: "user", content: phoneLocked ? `🔒 ${text}` : guest ? `❔ ${text}` : text, device });
   const memories = locked ? [] : await recall(text, 8);
 
   const messages = [
     { role: "system", content: persona(device, now) },
-    ...(locked ? [{ role: "system", content: LOCKED_NOTE }] : []),
+    ...(phoneLocked ? [{ role: "system", content: LOCKED_NOTE }] : guest ? [{ role: "system", content: GUEST_NOTE }] : []),
     ...(memories.length
       ? [{ role: "system", content: "Things you know about the user (from memory):\n" + memories.map((m) => "- " + m).join("\n") }]
       : []),

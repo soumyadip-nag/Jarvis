@@ -87,6 +87,7 @@ public class WakeWordService extends Service {
     private void listen() {
         WakeWordDetector detector = null;
         AudioRecord record = null;
+        VoiceId voice = new VoiceId();
         long lastWake = 0;
         try {
             File models = new File(getFilesDir(), "wakeword");
@@ -110,7 +111,7 @@ public class WakeWordService extends Service {
                 }
                 if (record == null) {
                     int size = Math.max(AudioRecord.getMinBufferSize(WakeWordDetector.RATE, AudioFormat.CHANNEL_IN_MONO,
-                        AudioFormat.ENCODING_PCM_16BIT), WakeWordDetector.CHUNK * 2 * 4);
+                        AudioFormat.ENCODING_PCM_16BIT), WakeWordDetector.CHUNK * 2 * 16);
                     record = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, WakeWordDetector.RATE,
                         AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, size);
                     record.startRecording();
@@ -123,15 +124,30 @@ public class WakeWordService extends Service {
                     read += n;
                 }
                 if (read < chunk.length) continue;
+                voice.add(chunk);
                 float score = detector.process(chunk);
                 long now = System.currentTimeMillis();
                 if (now < testUntil) {
-                    bestHeard = Math.max(bestHeard, score);
+                    // "Test my voice": the wake score, and at its best moment, how much it sounds like the owner.
+                    if (score > bestHeard) {
+                        bestHeard = score;
+                        if (score >= 0.2f) {
+                            Float match = voice.score(this);
+                            VoiceId.testScore = match == null ? -1 : match;
+                        }
+                    }
+                    continue;
+                }
+                // Setting up voice ID: the next five "Hey Jarvis" are recordings, not requests.
+                if (VoiceId.setupActive && score >= Math.min(threshold(), 0.3f) && now - lastWake > QUIET_AFTER_WAKE_MS) {
+                    lastWake = now;
+                    voice.collect(this);
                     continue;
                 }
                 if (score >= threshold() && now - lastWake > QUIET_AFTER_WAKE_MS) {
                     lastWake = now;
                     Log.i(TAG, "Hey Jarvis heard, score " + score);
+                    voice.checkWake(this);
                     if (MainActivity.visible || !HandsFree.ready(this)) {
                         woken("Tap to talk to Jarvis");
                         continue;
@@ -165,6 +181,7 @@ public class WakeWordService extends Service {
             if (detector != null) {
                 try { detector.close(); } catch (Exception ignored) { }
             }
+            voice.close();
         }
     }
 

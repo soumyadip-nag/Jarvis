@@ -215,7 +215,7 @@ public class JarvisNativePlugin extends Plugin {
         }
         Boolean briefing = call.getBoolean("briefing");
         if (briefing != null) prefs.putBoolean("briefing", briefing);
-        for (String key : new String[] { "rate", "pitch", "threshold", "briefAfterHours" }) {
+        for (String key : new String[] { "rate", "pitch", "threshold", "briefAfterHours", "voiceThreshold" }) {
             Float value = call.getFloat(key);
             if (value != null) prefs.putFloat(key, value);
         }
@@ -232,6 +232,7 @@ public class JarvisNativePlugin extends Plugin {
     @PluginMethod
     public void testWakeWord(PluginCall call) {
         WakeWordService.bestHeard = 0;
+        VoiceId.testScore = -1;
         WakeWordService.testUntil = System.currentTimeMillis() + call.getInt("ms", 6000);
         call.resolve();
     }
@@ -240,6 +241,7 @@ public class JarvisNativePlugin extends Plugin {
     public void wakeTestResult(PluginCall call) {
         JSObject result = new JSObject();
         result.put("best", WakeWordService.bestHeard);
+        if (VoiceId.enrolled(getContext())) result.put("voice", VoiceId.testScore);
         result.put("testing", System.currentTimeMillis() < WakeWordService.testUntil);
         call.resolve(result);
     }
@@ -258,11 +260,53 @@ public class JarvisNativePlugin extends Plugin {
         call.resolve();
     }
 
+    // ───────── voice ID ─────────
+
+    /** Starts recording the owner's voice: the next five "Hey Jarvis" (the listener must be on). */
+    @PluginMethod
+    public void startVoiceSetup(PluginCall call) {
+        if (!WakeWordService.running) {
+            call.reject("Turn on \"Always listen for Hey Jarvis\" first.");
+            return;
+        }
+        VoiceId.beginSetup(getContext());
+        call.resolve(voiceStatus());
+    }
+
+    @PluginMethod
+    public void cancelVoiceSetup(PluginCall call) {
+        VoiceId.cancelSetup();
+        call.resolve(voiceStatus());
+    }
+
+    @PluginMethod
+    public void voiceStatus(PluginCall call) {
+        call.resolve(voiceStatus());
+    }
+
+    @PluginMethod
+    public void removeVoice(PluginCall call) {
+        VoiceId.remove(getContext());
+        call.resolve(voiceStatus());
+    }
+
+    private JSObject voiceStatus() {
+        JSObject out = new JSObject();
+        out.put("enrolled", VoiceId.enrolled(getContext()));
+        out.put("active", VoiceId.setupActive);
+        out.put("collected", VoiceId.collected);
+        out.put("needed", VoiceId.SAMPLES);
+        out.put("modelReady", VoiceId.modelReady);
+        if (VoiceId.setupProblem != null) out.put("problem", VoiceId.setupProblem);
+        return out;
+    }
+
     /** Whether "Hey Jarvis" was heard since the last time the page asked. */
     @PluginMethod
     public void takeWake(PluginCall call) {
         JSObject result = new JSObject();
         result.put("wake", WakeWordService.wakePending);
+        if (VoiceId.lastWakeOwner != null) result.put("owner", VoiceId.lastWakeOwner.booleanValue());
         WakeWordService.wakePending = false;
         call.resolve(result);
     }

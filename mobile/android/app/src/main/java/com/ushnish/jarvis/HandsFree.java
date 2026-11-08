@@ -94,6 +94,8 @@ final class HandsFree {
     private TextToSpeech tts;
     private volatile boolean ttsReady;
     private AudioFocusRequest focus;
+    /** Voice ID said this wasn't the owner: the whole conversation is a guest's. */
+    private final boolean guest = Boolean.FALSE.equals(VoiceId.lastWakeOwner);
     private volatile boolean callMode; // listening through Bluetooth headphones, which are then in "call" mode
 
     HandsFree(Context context, Status status) {
@@ -400,6 +402,7 @@ final class HandsFree {
                 .put("voice", true);
             boolean isLocked = locked(context);
             if (isLocked) body.put("locked", true);
+            if (guest) body.put("guest", true);
             String inbox = isLocked ? null : JarvisNotifications.summaryForAi(context);
             if (inbox != null) body.put("notifications", inbox);
             try (OutputStream out = connection.getOutputStream()) {
@@ -450,6 +453,10 @@ final class HandsFree {
                 JSONObject action = actions.optJSONObject(i);
                 if (action == null || !PhoneControl.isPhoneAction(action)) continue;
                 // A reply is read back and only sent on a clear yes.
+                if (action.optString("type").equals("reply_message") && self.guest) {
+                    message.put("content", "I don't recognise your voice, so I can't send messages for you.");
+                    continue;
+                }
                 if (action.optString("type").equals("reply_message") && !locked(context)) {
                     String answer = self.ask("Reply to " + action.optString("to") + ": " + action.optString("text") + ". Shall I send it?");
                     if (!saidYes(answer)) {

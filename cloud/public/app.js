@@ -14,7 +14,7 @@
   };
   const defaultLang = ["en-IN", "en-GB", "en-US", "hi-IN"].includes(navigator.language) ? navigator.language : "en-IN";
   const settings = Object.assign(
-    { voice: "jarvis", rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang, wakeWord: true, wakeSensitivity: "normal", briefing: true, briefAfterHours: 2 },
+    { voice: "jarvis", rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang, wakeWord: true, wakeSensitivity: "normal", briefing: true, briefAfterHours: 2, voiceStrictness: "normal" },
     store.get("settings", {}),
   );
   const saveSettings = () => { store.set("settings", settings); pushWakeSettings(); };
@@ -506,11 +506,11 @@
   }
 
   /** Sends a message and passes each sentence of the reply on as it's written. Returns what api("chat") would. */
-  async function chatStreaming(text, onSentence, voice, notifications) {
+  async function chatStreaming(text, onSentence, voice, notifications, guest) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream", Authorization: "Bearer " + token },
-      body: JSON.stringify({ text, tz, voice: !!voice, ...(notifications ? { notifications } : {}) }),
+      body: JSON.stringify({ text, tz, voice: !!voice, ...(notifications ? { notifications } : {}), ...(guest ? { guest: true } : {}) }),
     });
     if (!(res.headers.get("content-type") || "").includes("event-stream")) {
       const data = await res.json().catch(() => ({}));
@@ -670,6 +670,7 @@
   // ───────── "Hey Jarvis" on the phone (the listening itself is WakeWordService.java) ─────────
   let conversation = false; // after "Hey Jarvis", follow-ups don't need it again
   let asleep = false;       // after "go to sleep", only a tap wakes Jarvis
+  let wakeGuest = false;    // this conversation's "Hey Jarvis" wasn't the owner's voice
   const END_PHRASE = /^((thank you|thanks|ok|okay) )?(thats all|that is all|nothing else|never ?mind|thats it)( (jarvis|for now|thanks|thank you))?$/;
   const SLEEP_PHRASE = /\b(go to sleep|sleep mode|stop listening)\b/;
   const plainWords = (text) => text.toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim(); // "That's all." -> "thats all"
@@ -684,6 +685,9 @@
     $("#wake-overlay").hidden = !!status.canOpenItself;
   }
 
+  // Voice ID: how alike a voice must be to the owner's. In tests the same voice scored 0.6 and up, others under 0.47.
+  const VOICE_THRESHOLDS = { relaxed: 0.4, normal: 0.5, strict: 0.6 };
+
   // How sure the detector must be. Ordinary speech scores under 0.1.
   const WAKE_THRESHOLDS = { high: 0.25, normal: 0.35, low: 0.5 };
 
@@ -693,6 +697,7 @@
       server: location.origin, token, lang: settings.lang, honorific: profile.honorific || "sir",
       rate: settings.rate, pitch: settings.pitch, threshold: WAKE_THRESHOLDS[settings.wakeSensitivity] || 0.35,
       briefing: !!settings.briefing, briefAfterHours: Number(settings.briefAfterHours) || 2,
+      voiceThreshold: VOICE_THRESHOLDS[settings.voiceStrictness] || 0.5,
     };
   }
 
@@ -721,6 +726,48 @@
     return window.confirm(`Send this to ${a.to}${a.app ? ` on ${a.app}` : ""}?\n\n"${a.text}"`);
   }
 
+  // ───────── voice ID ─────────
+  function showVoiceStatus(status) {
+    if (!status) return;
+    $("#voice-status").textContent = status.problem
+      ? status.problem
+      : status.active
+        ? `Say "Hey Jarvis" the way you normally would: ${status.collected} of ${status.needed}.`
+        : status.enrolled
+          ? "On: when \"Hey Jarvis\" isn't your voice, I still answer, but nothing personal. A locked phone stays locked to personal things either way."
+          : "Off: anyone who says \"Hey Jarvis\" is treated as you (except on a locked phone).";
+    $("#voice-setup").textContent = status.enrolled ? "Record my voice again" : "Set up my voice";
+    $("#voice-setup").disabled = !!status.active;
+    $("#voice-remove").hidden = !status.enrolled || !!status.active;
+  }
+
+  /** Records five "Hey Jarvis" through the listener, showing progress until the print is saved. */
+  async function setUpVoice() {
+    if (!settings.wakeWord) throw new Error('Turn on "Always listen for Hey Jarvis" first.');
+    $("#voice-status").textContent = "Getting ready (the first time, this downloads 26 MB)…";
+    let status = await Native("startVoiceSetup");
+    const started = Date.now();
+    while (Date.now() - started < 180_000) {
+      await new Promise((r) => setTimeout(r, 500));
+      status = await Native("voiceStatus");
+      if (status.problem) break;
+      if (!status.active && !status.modelReady) { $("#voice-status").textContent = "Getting ready (the first time, this downloads 26 MB)…"; continue; }
+      showVoiceStatus(status);
+      if (!status.active && status.enrolled && status.collected >= status.needed) {
+        $("#voice-status").textContent = "Done: I know your voice now. Try \"Test my voice\" to see how well it matches.";
+        $("#voice-remove").hidden = false;
+        $("#voice-setup").disabled = false;
+        $("#voice-setup").textContent = "Record my voice again";
+        return;
+      }
+    }
+    if (!status.problem && status.active) {
+      await Native("cancelVoiceSetup").catch(() => {});
+      status = { ...status, active: false, problem: "That took too long, so I stopped. Try again when you're ready." };
+    }
+    showVoiceStatus(status);
+  }
+
   /** "Test my voice": shows how sure the detector was, so the sensitivity can be set to suit. */
   async function testWakeWord() {
     const out = $("#wake-test-result");
@@ -730,14 +777,18 @@
     const threshold = WAKE_THRESHOLDS[settings.wakeSensitivity] || 0.35;
     for (;;) {
       await new Promise((r) => setTimeout(r, 400));
-      const { best, testing } = await Native("wakeTestResult");
+      const { best, testing, voice } = await Native("wakeTestResult");
       if (testing) continue;
       const score = Math.round(best * 100) / 100;
-      out.textContent = best >= threshold
+      const needed = VOICE_THRESHOLDS[settings.voiceStrictness] || 0.5;
+      const voiceLine = voice === undefined || best < 0.2 ? ""
+        : voice < 0 ? " Voice ID couldn't check it."
+        : ` Voice match ${Math.round(voice * 100) / 100}: ${voice >= needed ? "that's you" : `under ${needed}, so you'd be treated as a guest`}.`;
+      out.textContent = (best >= threshold
         ? `Heard you: ${score}. It answers at ${threshold} and above.`
         : best >= 0.1
           ? `Only ${score}, under ${threshold}: try "High" sensitivity, or say it a little slower.`
-          : `I didn't hear "Hey Jarvis" (${score}). Is the microphone allowed, and the setting above on?`;
+          : `I didn't hear "Hey Jarvis" (${score}). Is the microphone allowed, and the setting above on?`) + voiceLine;
       return;
     }
   }
@@ -748,6 +799,7 @@
 
   function endConversation(say) {
     conversation = false;
+    wakeGuest = false;
     resumeWakeWord();
     if (say) {
       renderMessage({ role: "assistant", content: say, ts: Date.now() });
@@ -757,6 +809,7 @@
 
   function goToSleep() {
     conversation = false;
+    wakeGuest = false;
     asleep = true;
     if (Native) Native("stopWakeWord").catch(() => {});
     const say = `Going to sleep, ${profile.honorific}. Tap me when you need me.`;
@@ -782,10 +835,11 @@
 
   async function checkWake() {
     if (!Native || !token || document.hidden) return;
-    const { wake } = await Native("takeWake").catch(() => ({}));
+    const { wake, owner } = await Native("takeWake").catch(() => ({}));
     if (!wake) return;
     if (busy || state === "listening") return resumeWakeWord();
     conversation = true;
+    wakeGuest = owner === false; // voice ID set up, and this wasn't the owner
     beep();
     setTimeout(listenNative, 150);
   }
@@ -833,7 +887,8 @@
     try {
       const voice = settings.autoSpeak && settings.voice === "jarvis" ? voiceQueue() : null;
       // Who has messaged on the phone, so "who texted me?" can be answered: senders and counts, never what they wrote.
-      const inbox = Native ? await Native("inboxSummary").catch(() => ({})) : {};
+      const guest = conversation && wakeGuest;
+      const inbox = Native && !guest ? await Native("inboxSummary").catch(() => ({})) : {};
       const streamed = [];
       let live = null;
       const data = await chatStreaming(text, (sentence, index) => {
@@ -842,13 +897,14 @@
         live.querySelector(".body").textContent = streamed.join(" ");
         scrollDown();
         voice?.add(sentence, index);
-      }, voice, inbox.summary);
+      }, voice, inbox.summary, guest);
       live?.remove(); // replaced by the finished reply below, with its actions
       seen.add(data.user.id);
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
       for (const a of data.actions.filter((a) => (a.type === "phone_control" || a.type === "reply_message") && !a.queued)) {
-        // A reply is shown first and only sent if you say so.
+        // A reply is shown first and only sent if you say so, and never for a voice that isn't yours.
+        if (a.type === "reply_message" && guest) { data.reply.content = "I don't recognise your voice, so I can't send messages for you."; continue; }
         if (a.type === "reply_message") {
           if (!confirmReply(a)) { data.reply.content = `All right, I haven't sent it, ${profile.honorific}.`; continue; }
           a.confirmed = true;
@@ -1152,6 +1208,14 @@
     $("#inbox-access").onclick = () => Native("openNotificationAccess").catch((e) => systemMessage(e.message));
     $("#inbox-app-info").onclick = () => Native("openAppInfo").catch((e) => systemMessage(e.message));
     showInboxStatus();
+    $("#voice-strictness").value = settings.voiceStrictness;
+    $("#voice-strictness").onchange = (e) => { settings.voiceStrictness = e.target.value; saveSettings(); };
+    $("#voice-setup").onclick = () => setUpVoice().catch((e) => { $("#voice-status").textContent = e.message; });
+    $("#voice-remove").onclick = async () => {
+      if (!window.confirm("Remove your voice? Everyone will be treated as you again.")) return;
+      showVoiceStatus(await Native("removeVoice").catch(() => ({})));
+    };
+    if (Native) Native("voiceStatus").then(showVoiceStatus).catch(() => {});
     $("#wake-sensitivity").value = settings.wakeSensitivity;
     $("#wake-sensitivity").onchange = (e) => { settings.wakeSensitivity = e.target.value; saveSettings(); };
     $("#wake-test").onclick = () => testWakeWord().catch((e) => { $("#wake-test-result").textContent = e.message; });

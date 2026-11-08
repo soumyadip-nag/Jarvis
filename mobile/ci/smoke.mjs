@@ -38,6 +38,11 @@ console.log("call:", await native("call", { number: "+15551234567" }));
 console.log("startWakeWord:", await native("startWakeWord"));
 await new Promise((r) => setTimeout(r, 20000));
 console.log("wakeWordStatus after 20s:", await native("wakeWordStatus"));
+// Voice ID: setup fetches the speaker model, then waits for five "Hey Jarvis" (nobody says them here).
+console.log("startVoiceSetup:", await native("startVoiceSetup"));
+await new Promise((r) => setTimeout(r, 30000));
+console.log("voiceStatus after 30s:", await native("voiceStatus"));
+console.log("cancelVoiceSetup:", await native("cancelVoiceSetup"));
 console.log("takeWake:", await native("takeWake"));
 console.log("stopWakeWord:", await native("stopWakeWord"));
 // Phone controls and notifications (no notification access on the emulator, so replies say so).
