@@ -172,6 +172,82 @@ public class JarvisNativePlugin extends Plugin {
         }
     }
 
+    // ───────── "Hey Jarvis" ─────────
+
+    @PluginMethod
+    public void startWakeWord(PluginCall call) {
+        if (getPermissionState("microphone") != PermissionState.GRANTED || getPermissionState("notifications") != PermissionState.GRANTED) {
+            requestPermissionForAliases(new String[] { "microphone", "notifications" }, call, "wakePermissions");
+            return;
+        }
+        WakeWordService.paused = false;
+        WakeWordService.start(getContext());
+        call.resolve(wakeStatus());
+    }
+
+    @PermissionCallback
+    private void wakePermissions(PluginCall call) {
+        if (getPermissionState("microphone") != PermissionState.GRANTED) {
+            call.reject("Jarvis needs the microphone to hear \"Hey Jarvis\".");
+            return;
+        }
+        WakeWordService.paused = false;
+        WakeWordService.start(getContext());
+        call.resolve(wakeStatus());
+    }
+
+    @PluginMethod
+    public void stopWakeWord(PluginCall call) {
+        WakeWordService.stop(getContext());
+        call.resolve(wakeStatus());
+    }
+
+    /** While the app listens to a request, the service lets go of the microphone. */
+    @PluginMethod
+    public void pauseWakeWord(PluginCall call) {
+        WakeWordService.paused = true;
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void resumeWakeWord(PluginCall call) {
+        WakeWordService.paused = false;
+        getActivity().runOnUiThread(() -> ((MainActivity) getActivity()).leaveLockScreen());
+        call.resolve();
+    }
+
+    /** Whether "Hey Jarvis" was heard since the last time the page asked. */
+    @PluginMethod
+    public void takeWake(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("wake", WakeWordService.wakePending);
+        WakeWordService.wakePending = false;
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void wakeWordStatus(PluginCall call) {
+        call.resolve(wakeStatus());
+    }
+
+    /** Android's setting that lets Jarvis open itself when it hears "Hey Jarvis", even on the lock screen. */
+    @PluginMethod
+    public void openOverlaySettings(PluginCall call) {
+        Intent settings = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getContext().getPackageName()));
+        settings.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(settings);
+        call.resolve();
+    }
+
+    private JSObject wakeStatus() {
+        JSObject status = new JSObject();
+        status.put("running", WakeWordService.running);
+        status.put("paused", WakeWordService.paused);
+        status.put("canOpenItself", Settings.canDrawOverlays(getContext()));
+        if (WakeWordService.problem != null) status.put("problem", WakeWordService.problem);
+        return status;
+    }
+
     // ───────── updates ─────────
 
     private static final String RELEASE = "https://github.com/RaGnaRoK260404/Jarvis/releases/download/apk-latest/";

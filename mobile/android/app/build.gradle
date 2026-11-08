@@ -11,6 +11,8 @@ android {
         def buildNumber = (System.getenv("JARVIS_BUILD") ?: "1") as Integer
         versionCode buildNumber + 1
         versionName "1.${buildNumber}"
+        // The wake-word engine has native code for each kind of processor: phones, and the test emulator.
+        ndk { abiFilters "arm64-v8a", "x86_64" }
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -57,12 +59,30 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // "Hey Jarvis": ONNX Runtime runs the wake-word models. Tests run the same Java with the desktop build.
+    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.31.1"
+    testImplementation "com.microsoft.onnxruntime:onnxruntime:1.31.1"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
 }
 
 apply from: 'capacitor.build.gradle'
+
+// Unit tests run on a computer, so they use the desktop ONNX Runtime instead of the Android one.
+configurations.configureEach { config ->
+    if (config.name.toLowerCase().contains("unittest")) {
+        config.exclude group: "com.microsoft.onnxruntime", module: "onnxruntime-android"
+    }
+}
+
+android.testOptions.unitTests.all {
+    testLogging {
+        events "passed", "failed"
+        showStandardStreams = true
+        exceptionFormat "full"
+    }
+}
 
 try {
     def servicesJSON = file('google-services.json')

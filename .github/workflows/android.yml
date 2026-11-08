@@ -67,6 +67,8 @@ jobs:
           npm ci 2>&1 | tee ci-out/build.log
           npx cap sync android 2>&1 | tee -a ci-out/build.log
           chmod +x android/gradlew
+          # The wake-word detector against recordings with known scores (see WakeWordDetectorTest).
+          (cd android && ./gradlew testDebugUnitTest --no-daemon --stacktrace) 2>&1 | tee -a ci-out/build.log
           (cd android && ./gradlew assembleDebug --no-daemon --stacktrace) 2>&1 | tee -a ci-out/build.log
           cp android/app/build/outputs/apk/debug/app-debug.apk ci-out/jarvis.apk
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs ci-out/jarvis.apk | tee ci-out/signature.txt

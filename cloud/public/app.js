@@ -14,7 +14,7 @@
   };
   const defaultLang = ["en-IN", "en-GB", "en-US", "hi-IN"].includes(navigator.language) ? navigator.language : "en-IN";
   const settings = Object.assign(
-    { voice: "jarvis", rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang },
+    { voice: "jarvis", rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang, wakeWord: true },
     store.get("settings", {}),
   );
   const saveSettings = () => store.set("settings", settings);
@@ -616,6 +616,7 @@
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   // ───────── updates to the Android app itself (web changes need nothing, the app loads the live site) ─────────
   let lastUpdateCheck = 0;
+  let wakeTimer = null;
   function checkForUpdate() {
     if (!Native || Date.now() - lastUpdateCheck < 3600_000) return;
     lastUpdateCheck = Date.now();
@@ -685,13 +686,24 @@
   async function listenNative() {
     if (state === "listening") return;
     stopSpeaking();
+    if (asleep) { asleep = false; startWakeWord(); } // a tap wakes Jarvis from "go to sleep"
     setState("listening", "Listening…");
+    await Native("pauseWakeWord").catch(() => {}); // the background listener lets go of the microphone
     // Android's speech service can drop the first attempt (errors 5, 8 and 11); a second one usually works.
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const { text } = await Native("listen", { lang: settings.lang });
-        if (text) return send(text);
-        setState("idle", "Didn't catch that");
+        if (!text) {
+          setState("idle", "Didn't catch that");
+          return endConversation();
+        }
+        const said = plainWords(text);
+        if (SLEEP_PHRASE.test(said)) return goToSleep();
+        if (END_PHRASE.test(said)) return endConversation("Very good, sir.");
+        await send(text);
+        // After "Hey Jarvis", keep listening for a follow-up without it.
+        if (conversation) setTimeout(() => { if (conversation && !busy && state !== "listening") listenNative(); }, 350);
+        else resumeWakeWord();
         return;
       } catch (e) {
         if (attempt === 0 && /error (5|8|11)\b/.test(e.message)) {
@@ -700,9 +712,79 @@
         }
         setState("idle", "Awaiting your command");
         systemMessage(e.message);
-        return;
+        return endConversation();
       }
     }
+  }
+
+  // ───────── "Hey Jarvis" on the phone (the listening itself is WakeWordService.java) ─────────
+  let conversation = false; // after "Hey Jarvis", follow-ups don't need it again
+  let asleep = false;       // after "go to sleep", only a tap wakes Jarvis
+  const END_PHRASE = /^((thank you|thanks|ok|okay) )?(thats all|that is all|nothing else|never ?mind|thats it)( (jarvis|for now|thanks|thank you))?$/;
+  const SLEEP_PHRASE = /\b(go to sleep|sleep mode|stop listening)\b/;
+  const plainWords = (text) => text.toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim(); // "That's all." -> "thats all"
+
+  function showWakeStatus(status) {
+    const el = $("#wake-status");
+    if (!el || !status) return;
+    el.textContent = asleep ? "Asleep: tap the reactor to wake me."
+      : status.problem ? status.problem
+      : status.running ? (status.canOpenItself ? "Listening, even with the app closed." : "Listening. Without the setting below, you'll get a notification to tap instead.")
+      : "Off.";
+    $("#wake-overlay").hidden = !!status.canOpenItself;
+  }
+
+  function startWakeWord() {
+    if (!Native || !settings.wakeWord || asleep) return;
+    Native("startWakeWord").then(showWakeStatus).catch((e) => showWakeStatus({ problem: e.message }));
+  }
+
+  function resumeWakeWord() {
+    if (Native && settings.wakeWord && !asleep) Native("resumeWakeWord").catch(() => {});
+  }
+
+  function endConversation(say) {
+    conversation = false;
+    resumeWakeWord();
+    if (say) {
+      renderMessage({ role: "assistant", content: say, ts: Date.now() });
+      speak(say);
+    }
+  }
+
+  function goToSleep() {
+    conversation = false;
+    asleep = true;
+    if (Native) Native("stopWakeWord").catch(() => {});
+    const say = `Going to sleep, ${profile.honorific}. Tap me when you need me.`;
+    renderMessage({ role: "assistant", content: say, ts: Date.now() });
+    speak(say).finally(() => setState("idle", "Asleep: tap the reactor to wake me"));
+    showWakeStatus({});
+  }
+
+  /** A short tone, so you know Jarvis is listening. */
+  function beep() {
+    try {
+      const c = audio();
+      const tone = c.createOscillator();
+      const level = c.createGain();
+      tone.frequency.value = 1100;
+      level.gain.setValueAtTime(0.15, c.currentTime);
+      level.gain.exponentialRampToValueAtTime(0.001, c.currentTime + 0.12);
+      tone.connect(level).connect(c.destination);
+      tone.start();
+      tone.stop(c.currentTime + 0.13);
+    } catch {}
+  }
+
+  async function checkWake() {
+    if (!Native || !token || document.hidden) return;
+    const { wake } = await Native("takeWake").catch(() => ({}));
+    if (!wake) return;
+    if (busy || state === "listening") return resumeWakeWord();
+    conversation = true;
+    beep();
+    setTimeout(listenNative, 150);
   }
 
   function listen() {
@@ -947,6 +1029,8 @@
     if (!reactor) reactor = new Reactor($("#reactor"));
     if (Native) refreshNativeContacts();
     checkForUpdate();
+    startWakeWord();
+    if (Native && !wakeTimer) wakeTimer = setInterval(checkWake, 700);
     setState("booting", "Connecting");
     if (!chatEl().children.length) {
       const empty = document.createElement("div");
@@ -1037,6 +1121,16 @@
     $("#auto-open").checked = settings.autoOpen;
     $("#auto-open").onchange = (e) => { settings.autoOpen = e.target.checked; saveSettings(); };
     $("#confirm-calls-row").hidden = !Native;
+    $("#wake-row").hidden = !Native;
+    $("#wake-word").checked = settings.wakeWord;
+    $("#wake-word").onchange = (e) => {
+      settings.wakeWord = e.target.checked;
+      saveSettings();
+      if (settings.wakeWord) { asleep = false; startWakeWord(); }
+      else Native("stopWakeWord").then(showWakeStatus).catch(() => {});
+    };
+    $("#wake-overlay").onclick = () => Native("openOverlaySettings").catch((e) => systemMessage(e.message));
+    if (Native) Native("wakeWordStatus").then(showWakeStatus).catch(() => {});
     $("#call-test").hidden = !Native;
     $("#call-test-start").onclick = runCallTest;
     $("#confirm-calls").checked = settings.confirmCalls;

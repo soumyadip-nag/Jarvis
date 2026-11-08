@@ -43,6 +43,12 @@ console.log("call test:", await evaluate(
      new Promise((r) => setTimeout(() => r("no answer after 90s"), 90000)),
    ]).catch((e) => "ERROR " + e.message)`,
 ));
+// "Hey Jarvis": the service starts, fetches its models and listens (nobody speaks to the emulator).
+console.log("startWakeWord:", await native("startWakeWord"));
+await new Promise((r) => setTimeout(r, 20000));
+console.log("wakeWordStatus after 20s:", await native("wakeWordStatus"));
+console.log("takeWake:", await native("takeWake"));
+console.log("stopWakeWord:", await native("stopWakeWord"));
 console.log("checkUpdate:", await native("checkUpdate"));
 console.log("installUpdate:", await native("installUpdate")); // should end at Android's install prompt
 socket.close();
