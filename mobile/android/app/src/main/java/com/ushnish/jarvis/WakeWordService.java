@@ -44,6 +44,9 @@ public class WakeWordService extends Service {
     static volatile boolean paused = false;
     static volatile boolean wakePending = false;
     static volatile String problem = null;
+    static volatile boolean conversing = false;  // a hands-free conversation is going on
+    static volatile long testUntil = 0;           // "Test my voice" in Settings: show scores, don't answer
+    static volatile float bestHeard = 0;          // the highest score since the test started
 
     private Thread worker;
 
@@ -122,10 +125,30 @@ public class WakeWordService extends Service {
                 if (read < chunk.length) continue;
                 float score = detector.process(chunk);
                 long now = System.currentTimeMillis();
-                if (score >= WakeWordDetector.THRESHOLD && now - lastWake > QUIET_AFTER_WAKE_MS) {
+                if (now < testUntil) {
+                    bestHeard = Math.max(bestHeard, score);
+                    continue;
+                }
+                if (score >= threshold() && now - lastWake > QUIET_AFTER_WAKE_MS) {
                     lastWake = now;
                     Log.i(TAG, "Hey Jarvis heard, score " + score);
-                    woken();
+                    if (MainActivity.visible || !HandsFree.ready(this)) {
+                        woken("Tap to talk to Jarvis");
+                        continue;
+                    }
+                    // Nobody's looking at the app: hold the whole conversation from here.
+                    record.stop();
+                    record.release();
+                    record = null;
+                    HandsFree.Outcome outcome = converse();
+                    if (outcome == HandsFree.Outcome.SLEEP) {
+                        stopSelf();
+                        break;
+                    }
+                    if (outcome == HandsFree.Outcome.NEEDS_APP) woken("Tap to finish that in Jarvis");
+                    paused = false;
+                    wakePending = false;
+                    lastWake = System.currentTimeMillis();
                 }
             }
         } catch (InterruptedException ignored) {
@@ -145,8 +168,27 @@ public class WakeWordService extends Service {
         }
     }
 
+    private HandsFree.Outcome converse() {
+        conversing = true;
+        try {
+            return new HandsFree(this, this::showStatus).run();
+        } finally {
+            conversing = false;
+            showStatus("Say \"Hey Jarvis\"");
+        }
+    }
+
+    private void showStatus(String text) {
+        getSystemService(NotificationManager.class).notify(NOTIFICATION, listeningNotification(text));
+    }
+
+    /** How sure the detector must be: the sensitivity chosen in Settings. */
+    private float threshold() {
+        return getSharedPreferences(HandsFree.PREFS, MODE_PRIVATE).getFloat("threshold", WakeWordDetector.THRESHOLD);
+    }
+
     /** Opens Jarvis to listen. Without "Display over other apps", Android only allows a notification to do that. */
-    private void woken() {
+    private void woken(String text) {
         wakePending = true;
         paused = true; // the app takes the microphone now; it resumes this when the conversation ends
         Intent open = new Intent(this, MainActivity.class)
@@ -168,7 +210,7 @@ public class WakeWordService extends Service {
         Notification notification = new NotificationCompat.Builder(this, ALERT_CHANNEL)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("Yes, sir?")
-            .setContentText("Tap to talk to Jarvis")
+            .setContentText(text)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setAutoCancel(true)

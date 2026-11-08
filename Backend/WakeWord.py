@@ -22,7 +22,7 @@ RELEASE = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/"
 FILES = ("melspectrogram.onnx", "embedding_model.onnx", "hey_jarvis_v0.1.onnx")
 RATE = 16000
 CHUNK = 1280            # 80 ms: the step the models were built for
-THRESHOLD = 0.5
+THRESHOLD = 0.35  # ordinary speech scores under 0.1; an accented "Hey Jarvis" can be 0.4 to 0.7
 QUIET_AFTER_WAKE = 2.0  # seconds: one "Hey Jarvis" shouldn't count twice
 
 

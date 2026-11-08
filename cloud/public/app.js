@@ -14,10 +14,10 @@
   };
   const defaultLang = ["en-IN", "en-GB", "en-US", "hi-IN"].includes(navigator.language) ? navigator.language : "en-IN";
   const settings = Object.assign(
-    { voice: "jarvis", rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang, wakeWord: true },
+    { voice: "jarvis", rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang, wakeWord: true, wakeSensitivity: "normal" },
     store.get("settings", {}),
   );
-  const saveSettings = () => store.set("settings", settings);
+  const saveSettings = () => { store.set("settings", settings); pushWakeSettings(); };
 
   let token = store.get("token", null);
   let lastTs = 0;
@@ -27,8 +27,10 @@
   let profile = store.get("profile", { name: "", honorific: "sir" });
   const setProfile = (user) => {
     if (!user) return;
+    const changed = user.honorific !== profile.honorific;
     profile = user;
     store.set("profile", user);
+    if (changed) pushWakeSettings();
   };
   let state = "booting";
   let lastActivity = Date.now();
@@ -729,14 +731,50 @@
     if (!el || !status) return;
     el.textContent = asleep ? "Asleep: tap the reactor to wake me."
       : status.problem ? status.problem
-      : status.running ? (status.canOpenItself ? "Listening, even with the app closed." : "Listening. Without the setting below, you'll get a notification to tap instead.")
+      : status.running ? "Listening, even with the app closed or the phone locked: I'll answer hands-free."
       : "Off.";
     $("#wake-overlay").hidden = !!status.canOpenItself;
   }
 
+  // How sure the detector must be. Ordinary speech scores under 0.1.
+  const WAKE_THRESHOLDS = { high: 0.25, normal: 0.35, low: 0.5 };
+
+  /** What the phone needs to answer "Hey Jarvis" by itself, with the app closed. */
+  function wakeSettings() {
+    return {
+      server: location.origin, token, lang: settings.lang, honorific: profile.honorific || "sir",
+      rate: settings.rate, pitch: settings.pitch, threshold: WAKE_THRESHOLDS[settings.wakeSensitivity] || 0.35,
+    };
+  }
+
+  function pushWakeSettings() {
+    if (typeof Native === "function" && token) Native("setWakeSettings", wakeSettings()).catch(() => {});
+  }
+
   function startWakeWord() {
     if (!Native || !settings.wakeWord || asleep) return;
-    Native("startWakeWord").then(showWakeStatus).catch((e) => showWakeStatus({ problem: e.message }));
+    Native("startWakeWord", wakeSettings()).then(showWakeStatus).catch((e) => showWakeStatus({ problem: e.message }));
+  }
+
+  /** "Test my voice": shows how sure the detector was, so the sensitivity can be set to suit. */
+  async function testWakeWord() {
+    const out = $("#wake-test-result");
+    if (!Native) return;
+    await Native("testWakeWord", { ms: 6000 });
+    out.textContent = 'Say "Hey Jarvis" now…';
+    const threshold = WAKE_THRESHOLDS[settings.wakeSensitivity] || 0.35;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 400));
+      const { best, testing } = await Native("wakeTestResult");
+      if (testing) continue;
+      const score = Math.round(best * 100) / 100;
+      out.textContent = best >= threshold
+        ? `Heard you: ${score}. It answers at ${threshold} and above.`
+        : best >= 0.1
+          ? `Only ${score}, under ${threshold}: try "High" sensitivity, or say it a little slower.`
+          : `I didn't hear "Hey Jarvis" (${score}). Is the microphone allowed, and the setting above on?`;
+      return;
+    }
   }
 
   function resumeWakeWord() {
@@ -1002,6 +1040,7 @@
 
   // ───────── session ─────────
   function logout() {
+    if (Native) Native("stopWakeWord", { signOut: true }).catch(() => {});
     token = null;
     store.del("token");
     store.del("contacts");
@@ -1129,6 +1168,9 @@
       if (settings.wakeWord) { asleep = false; startWakeWord(); }
       else Native("stopWakeWord").then(showWakeStatus).catch(() => {});
     };
+    $("#wake-sensitivity").value = settings.wakeSensitivity;
+    $("#wake-sensitivity").onchange = (e) => { settings.wakeSensitivity = e.target.value; saveSettings(); };
+    $("#wake-test").onclick = () => testWakeWord().catch((e) => { $("#wake-test-result").textContent = e.message; });
     $("#wake-overlay").onclick = () => Native("openOverlaySettings").catch((e) => systemMessage(e.message));
     if (Native) Native("wakeWordStatus").then(showWakeStatus).catch(() => {});
     $("#call-test").hidden = !Native;

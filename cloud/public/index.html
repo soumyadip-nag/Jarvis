@@ -95,7 +95,16 @@
         <div class="setting" id="wake-row" hidden>
           <label><input type="checkbox" id="wake-word"> Always listen for "Hey Jarvis"</label>
           <p class="muted small-text" id="wake-status"></p>
-          <button id="wake-overlay" class="ghost" hidden>Let Jarvis open itself, even on the lock screen</button>
+          <label>Sensitivity
+            <select id="wake-sensitivity">
+              <option value="high">High: hears a softer voice, more false alarms</option>
+              <option value="normal">Normal</option>
+              <option value="low">Low: fewer false alarms</option>
+            </select>
+          </label>
+          <button id="wake-test" class="ghost">Test my voice</button>
+          <p class="muted small-text" id="wake-test-result"></p>
+          <button id="wake-overlay" class="ghost" hidden>Let Jarvis open the app for calls and links</button>
         </div>
         <div class="setting toggle" id="confirm-calls-row" hidden><label><input type="checkbox" id="confirm-calls"> Ask before placing a call</label></div>
         <div class="setting">

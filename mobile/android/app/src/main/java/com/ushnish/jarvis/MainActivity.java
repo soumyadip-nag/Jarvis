@@ -8,6 +8,21 @@ import android.view.WindowManager;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+    /** Whether the app is on screen: if so, it answers "Hey Jarvis" itself; if not, the service does. */
+    static volatile boolean visible = false;
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        visible = true;
+    }
+
+    @Override
+    public void onPause() {
+        visible = false;
+        super.onPause();
+    }
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(JarvisNativePlugin.class);

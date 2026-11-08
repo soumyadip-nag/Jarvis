@@ -176,6 +176,7 @@ public class JarvisNativePlugin extends Plugin {
 
     @PluginMethod
     public void startWakeWord(PluginCall call) {
+        saveWakeSettings(call);
         if (getPermissionState("microphone") != PermissionState.GRANTED || getPermissionState("notifications") != PermissionState.GRANTED) {
             requestPermissionForAliases(new String[] { "microphone", "notifications" }, call, "wakePermissions");
             return;
@@ -198,8 +199,46 @@ public class JarvisNativePlugin extends Plugin {
 
     @PluginMethod
     public void stopWakeWord(PluginCall call) {
+        // Signing out also stops it answering hands-free.
+        if (call.getBoolean("signOut", false)) getContext().getSharedPreferences(HandsFree.PREFS, 0).edit().clear().apply();
         WakeWordService.stop(getContext());
         call.resolve(wakeStatus());
+    }
+
+    /** What a hands-free conversation needs: the server, the sign-in, and the voice and sensitivity settings. */
+    private void saveWakeSettings(PluginCall call) {
+        android.content.SharedPreferences.Editor prefs = getContext().getSharedPreferences(HandsFree.PREFS, 0).edit();
+        for (String key : new String[] { "server", "token", "lang", "honorific" }) {
+            String value = call.getString(key);
+            if (value != null) prefs.putString(key, value);
+        }
+        for (String key : new String[] { "rate", "pitch", "threshold" }) {
+            Float value = call.getFloat(key);
+            if (value != null) prefs.putFloat(key, value);
+        }
+        prefs.apply();
+    }
+
+    @PluginMethod
+    public void setWakeSettings(PluginCall call) {
+        saveWakeSettings(call);
+        call.resolve(wakeStatus());
+    }
+
+    /** "Test my voice": for a few seconds, the scores are recorded instead of answered. */
+    @PluginMethod
+    public void testWakeWord(PluginCall call) {
+        WakeWordService.bestHeard = 0;
+        WakeWordService.testUntil = System.currentTimeMillis() + call.getInt("ms", 6000);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void wakeTestResult(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("best", WakeWordService.bestHeard);
+        result.put("testing", System.currentTimeMillis() < WakeWordService.testUntil);
+        call.resolve(result);
     }
 
     /** While the app listens to a request, the service lets go of the microphone. */
@@ -243,6 +282,7 @@ public class JarvisNativePlugin extends Plugin {
         JSObject status = new JSObject();
         status.put("running", WakeWordService.running);
         status.put("paused", WakeWordService.paused);
+        status.put("conversing", WakeWordService.conversing);
         status.put("canOpenItself", Settings.canDrawOverlays(getContext()));
         if (WakeWordService.problem != null) status.put("problem", WakeWordService.problem);
         return status;

@@ -24,7 +24,8 @@ public final class WakeWordDetector implements AutoCloseable {
 
     public static final int RATE = 16000;
     public static final int CHUNK = 1280;
-    public static final float THRESHOLD = 0.5f;
+    /** The default ("normal" sensitivity). Ordinary speech scores under 0.1; accented "Hey Jarvis" can be 0.4 to 0.7. */
+    public static final float THRESHOLD = 0.35f;
     public static final String[] FILES = { "melspectrogram.onnx", "embedding_model.onnx", "hey_jarvis_v0.1.onnx" };
     public static final String MODELS_URL = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/";
 
