@@ -24,11 +24,6 @@
 
         </activity>
 
-        <service
-            android:name=".CallTestService"
-            android:exported="false"
-            android:foregroundServiceType="microphone|mediaPlayback" />
-
         <!-- Listens for "Hey Jarvis" in the background. -->
         <service
             android:name=".WakeWordService"
@@ -45,20 +40,6 @@
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
-        </service>
-
-        <!-- Doing tasks inside other apps (PhoneAgent). Only works once the user turns on Accessibility for Jarvis. -->
-        <service
-            android:name=".JarvisAccessibility"
-            android:exported="true"
-            android:label="Jarvis"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_config" />
         </service>
 
         <provider
@@ -83,7 +64,6 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- So that "Hey Jarvis" can open Jarvis by itself; the user turns this on in Android's settings. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
@@ -97,11 +77,6 @@
         </intent>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
-        </intent>
-        <!-- "Open WhatsApp": finding apps by name. -->
-        <intent>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
 </manifest>

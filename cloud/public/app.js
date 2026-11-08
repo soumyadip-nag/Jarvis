@@ -149,20 +149,11 @@
     await call();
   }
 
-  /** A call Jarvis holds itself: the number stays on the phone until this one is sent for the laptop to dial. */
-  async function startAiCall(a) {
-    if (Native) await refreshNativeContacts();
-    const outcome = callOutcome(a.name);
-    if (!outcome.contact) return outcome.say;
-    await api("calls", { method: "POST", body: { name: outcome.contact.name, number: outcome.contact.tel, goal: a.goal } });
-    return `Your laptop is calling ${outcome.contact.name}, ${profile.honorific}, to do this: ${a.goal} I'll report back here when the call ends.`;
-  }
-
   function renderContactsInfo() {
     if (Native) {
       $("#import-contacts").hidden = true;
       $("#clear-contacts").hidden = true;
-      $("#contacts-info").textContent = `${contacts.length} found on this phone, including WhatsApp contacts where Android lists them. They stay here, except the number of someone you ask Jarvis to call for you, which goes to your laptop.`;
+      $("#contacts-info").textContent = `${contacts.length} found on this phone, including WhatsApp contacts where Android lists them. They stay on this phone.`;
       return;
     }
     const supported = "contacts" in navigator && "select" in navigator.contacts;
@@ -171,8 +162,8 @@
     $("#contacts-info").textContent = !supported
       ? "This browser can't read your contacts. Use Chrome on your Pixel."
       : contacts.length
-        ? `${contacts.length} imported. Numbers stay on this phone, except the number of someone you ask Jarvis to call for you, which goes to your laptop. Import again to add more.`
-        : "Choose the people Jarvis can call. Numbers stay on this phone, except the number of someone you ask Jarvis to call for you, which goes to your laptop.";
+        ? `${contacts.length} imported. Numbers stay on this phone. Import again to add more.`
+        : "Choose the people Jarvis can call. Numbers stay on this phone.";
   }
 
   async function importContacts() {
@@ -642,49 +633,6 @@
   }
 
   // ───────── experiment: can Jarvis talk on a normal call through the speaker? ─────────
-  async function runCallTest() {
-    const number = $("#call-test-number").value.trim();
-    const out = $("#call-test-result");
-    if (!/^[+\d][\d\s()-]{2,}$/.test(number)) { out.textContent = "Enter a phone number first."; return; }
-    if (!confirm(`Call ${number} now? Jarvis will speak on speaker and record for up to a minute.`)) return;
-
-    stopSpeaking();
-    const button = $("#call-test-start");
-    button.disabled = true;
-    out.textContent = "Calling. Tap the notification when they answer.";
-    const message = `Hello, this is Jarvis, an A I assistant calling on behalf of ${profile.name}. This is a test call and this call is being recorded. Please say a few words after this message.`;
-    try {
-      const r = await Native("startCallTest", { number, message });
-      const peaks = r.loudestPerSecond || [];
-      const loudest = peaks.length ? Math.max(...peaks) : 0;
-      const verdict = r.recordError ? `The mic failed: ${r.recordError}`
-        : r.silencedByAndroid ? "Android silenced the mic during the call."
-        : loudest < 200 ? "The mic heard almost nothing."
-        : "The mic was working during the call.";
-      out.replaceChildren();
-      const line = (text) => { const p = document.createElement("p"); p.textContent = text; out.append(p); return p; };
-      line(verdict);
-      line(`Speaker on: ${r.speakerOn}. Speech played: ${!!r.speechStarted}. Silenced by Android: ${r.silencedByAndroid ?? "unknown"}.`);
-      line(`Loudest sound each second (0-32767): ${peaks.join(", ")}`);
-      if (r.wav) {
-        const player = document.createElement("audio");
-        player.controls = true;
-        player.style.width = "100%";
-        player.src = "data:audio/wav;base64," + r.wav;
-        out.append(player);
-        const heard = line("Transcribing what the mic heard…");
-        api("transcribe", { method: "POST", body: { audio: r.wav } })
-          .then((t) => { heard.textContent = `The mic heard: "${t.text.trim() || "(no words)"}"`; })
-          .catch((e) => { heard.textContent = `Couldn't transcribe it: ${e.message}`; });
-      }
-      line("Now ask the person: did they hear Jarvis clearly?");
-    } catch (e) {
-      out.textContent = e.message;
-    } finally {
-      button.disabled = false;
-    }
-  }
-
   async function listenNative() {
     if (state === "listening") return;
     stopSpeaking();
@@ -760,7 +708,6 @@
   /** Whether Jarvis can see notifications: needed for "who messaged me", replies and the briefing. */
   async function showInboxStatus() {
     if (!Native) return;
-    showAgentStatus();
     const { allowed } = await Native("inboxSummary").catch(() => ({}));
     $("#inbox-status").textContent = allowed
       ? "On: I can tell you who has messaged (never what they wrote), reply for you, and brief you when you're back."
@@ -772,16 +719,6 @@
   /** Shows a reply before it's sent: OK sends it, Cancel doesn't. */
   function confirmReply(a) {
     return window.confirm(`Send this to ${a.to}${a.app ? ` on ${a.app}` : ""}?\n\n"${a.text}"`);
-  }
-
-  /** Whether Jarvis can work inside other apps (Accessibility). */
-  async function showAgentStatus() {
-    const { allowed } = await Native("agentStatus").catch(() => ({}));
-    $("#agent-status").textContent = allowed
-      ? "On: ask me to do things inside your apps, like \"send Rahul a WhatsApp saying I'm late\". I ask before sending, paying, posting or deleting, and I never work in banking, payment or password apps. Stop me any time from the notification."
-      : "Off. Tap below, choose Jarvis and turn it on. If Android says it's a restricted setting, open App info, tap ⋮ (top right), choose \"Allow restricted settings\", then try again. While a task runs, what's on screen is sent to the AI.";
-    $("#agent-access").hidden = !!allowed;
-    $("#agent-app-info").hidden = !!allowed;
   }
 
   /** "Test my voice": shows how sure the detector was, so the sensitivity can be set to suit. */
@@ -910,22 +847,16 @@
       seen.add(data.user.id);
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
-      for (const a of data.actions.filter((a) => (a.type === "phone_control" || a.type === "reply_message" || a.type === "phone_task") && !a.queued)) {
+      for (const a of data.actions.filter((a) => (a.type === "phone_control" || a.type === "reply_message") && !a.queued)) {
         // A reply is shown first and only sent if you say so.
         if (a.type === "reply_message") {
           if (!confirmReply(a)) { data.reply.content = `All right, I haven't sent it, ${profile.honorific}.`; continue; }
           a.confirmed = true;
         }
-        // The phone carries on by itself (hands-free or after the app closes), so it needs the sign-in.
-        if (Native) await Native("setWakeSettings", wakeSettings()).catch(() => {});
         const done = Native
           ? await Native("phoneAction", { action: a }).catch((e) => ({ error: e.message }))
           : { error: `That only works in the Jarvis app on your phone, ${profile.honorific}.` };
         if (done.error) data.reply.content = done.error;
-      }
-      const aiCall = data.actions.find((a) => a.type === "ai_call" && !a.queued);
-      if (aiCall) {
-        data.reply.content = await startAiCall(aiCall).catch((e) => `I couldn't start that call, ${profile.honorific}: ${e.message}`);
       }
       const call = data.actions.find((a) => a.type === "call_contact" && !a.queued);
       if (call && Native) await refreshNativeContacts();
@@ -985,28 +916,19 @@
         });
         navigator.vibrate?.(120);
         if (settings.autoOpen) openUrl(cmd.url);
-      } else if (cmd.type === "ai_call") {
-        // The same rule as on the laptop: a call happens when it was asked for, or not at all.
-        const say = Date.now() - cmd.ts > 120_000
-          ? `I didn't call ${cmd.name}, because the request from your laptop had waited too long.`
-          : await startAiCall(cmd).catch((e) => `I couldn't start that call: ${e.message}`);
-        renderMessage({ role: "assistant", ts: cmd.ts, content: say });
-        navigator.vibrate?.(120);
       } else if (cmd.type === "call_contact") {
         if (Native) await refreshNativeContacts();
         const outcome = callOutcome(cmd.name);
         renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${outcome.say}`, actions: [cmd] });
         navigator.vibrate?.(120);
         if (outcome.contact && settings.autoOpen) openUrl(telUrl(outcome.contact.tel));
-      } else if (cmd.type === "phone_control" || cmd.type === "reply_message" || cmd.type === "phone_task") {
-        if (Native) await Native("setWakeSettings", wakeSettings()).catch(() => {});
+      } else if (cmd.type === "phone_control" || cmd.type === "reply_message") {
         if (cmd.type === "reply_message" && !confirmReply(cmd)) {
           renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: reply to ${cmd.to} not sent.` });
           return;
         }
         const done = Native ? await Native("phoneAction", { action: cmd.type === "reply_message" ? { ...cmd, confirmed: true } : cmd }).catch((e) => ({ error: e.message })) : { error: "This needs the phone app." };
-        const say = done.error || (cmd.type === "reply_message" ? `Sent to ${cmd.to}: "${cmd.text}"`
-          : cmd.type === "phone_task" ? `Working on it: ${cmd.goal}` : `${cmd.confirm}.`);
+        const say = done.error || (cmd.type === "reply_message" ? `Sent to ${cmd.to}: "${cmd.text}"` : `${cmd.confirm}.`);
         renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${say}` });
         navigator.vibrate?.(120);
       }
@@ -1222,9 +1144,6 @@
       if (settings.wakeWord) { asleep = false; startWakeWord(); }
       else Native("stopWakeWord").then(showWakeStatus).catch(() => {});
     };
-    $("#agent-row").hidden = !Native;
-    $("#agent-access").onclick = () => Native("openAccessibilitySettings").catch((e) => systemMessage(e.message));
-    $("#agent-app-info").onclick = () => Native("openAppInfo").catch((e) => systemMessage(e.message));
     $("#inbox-row").hidden = !Native;
     $("#briefing").checked = settings.briefing;
     $("#briefing").onchange = (e) => { settings.briefing = e.target.checked; saveSettings(); };
@@ -1238,8 +1157,6 @@
     $("#wake-test").onclick = () => testWakeWord().catch((e) => { $("#wake-test-result").textContent = e.message; });
     $("#wake-overlay").onclick = () => Native("openOverlaySettings").catch((e) => systemMessage(e.message));
     if (Native) Native("wakeWordStatus").then(showWakeStatus).catch(() => {});
-    $("#call-test").hidden = !Native;
-    $("#call-test-start").onclick = runCallTest;
     $("#confirm-calls").checked = settings.confirmCalls;
     $("#confirm-calls").onchange = (e) => { settings.confirmCalls = e.target.checked; saveSettings(); };
     $("#speech-lang").value = settings.lang;

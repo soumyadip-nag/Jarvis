@@ -27,8 +27,8 @@ final class PhoneControl {
     /** The phone actions the server can hand back: phone_control and reply_message. Null when done, or what to say. */
     static String perform(Context context, JSONObject action, String honorific) {
         String type = action.optString("type");
-        // On a locked phone, whoever is speaking may not be the user: no messages or tasks in apps.
-        if ((type.equals("reply_message") || type.equals("phone_task")) && HandsFree.locked(context)) {
+        // On a locked phone, whoever is speaking may not be the user: no messages.
+        if (type.equals("reply_message") && HandsFree.locked(context)) {
             return "Please unlock your phone first, " + honorific + ", and ask me again.";
         }
         if (type.equals("reply_message") && !action.optBoolean("confirmed")) {
@@ -37,8 +37,6 @@ final class PhoneControl {
         switch (type) {
             case "phone_control":
                 return run(context, action, honorific);
-            case "phone_task":
-                return PhoneAgent.start(context, action.optString("goal"), honorific);
             case "reply_message": {
                 JarvisNotifications listener = JarvisNotifications.instance;
                 if (listener == null) {
@@ -53,7 +51,7 @@ final class PhoneControl {
 
     static boolean isPhoneAction(JSONObject action) {
         String type = action.optString("type");
-        return !action.optBoolean("queued") && (type.equals("phone_control") || type.equals("reply_message") || type.equals("phone_task"));
+        return !action.optBoolean("queued") && (type.equals("phone_control") || type.equals("reply_message"));
     }
 
     static String run(Context context, JSONObject action, String honorific) {

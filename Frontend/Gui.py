@@ -677,10 +677,6 @@ class AssistantWorker(QObject):
     def listen(self):
         if not self.handle_query:
             return
-        from Backend.CloudAssistant import call_active
-        if call_active.is_set():
-            self.status.emit("On a call, so I'm not listening")
-            return
         self.state.emit("listening")
         self.status.emit("Listening…")
         try:
@@ -699,8 +695,7 @@ class AssistantWorker(QObject):
 
     def _respond(self, text):
         self.reply.emit("jarvis", text)
-        from Backend.CloudAssistant import call_active
-        if self.voice_enabled and not call_active.is_set():
+        if self.voice_enabled:
             self.state.emit("speaking")
             self.status.emit("Speaking")
             self._stop_speaking = False
@@ -787,7 +782,7 @@ class SyncWorker(QObject):
 
     def _loop(self):
         from Backend.CloudSync import CloudClient, CloudError
-        from Backend.CloudAssistant import run_laptop_command, start_ai_call
+        from Backend.CloudAssistant import run_laptop_command
         client = CloudClient()
         first = True
         while self.running:
@@ -812,8 +807,6 @@ class SyncWorker(QObject):
                             run_laptop_command(cmd["command"])
                         except Exception as e:
                             print(f"Command failed: {e}")
-                    elif cmd.get("type") == "ai_call":
-                        start_ai_call(cmd, client, self.message.emit, self.status.emit)
                     client.done(cmd["id"])
                     self.last_activity = time.time()
                 self.devices.emit(data.get("devices", {}))
@@ -1134,8 +1127,7 @@ class MainWindow(QMainWindow):
             self.request_listen.emit()
 
     def on_wake_word(self):
-        from Backend.CloudAssistant import call_active
-        if self.sleeping or call_active.is_set() or self.state not in ("idle", "speaking"):
+        if self.sleeping or self.state not in ("idle", "speaking"):
             return
         self.conversation = True
         beep()

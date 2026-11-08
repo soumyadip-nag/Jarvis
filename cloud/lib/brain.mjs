@@ -67,13 +67,11 @@ Devices and actions:
 - After an action on a device, confirm in a few words (for example "Done, ${HONORIFIC()}." or "Opening YouTube."). Don't read out URLs.
 - After looking something up, such as the weather, just give the answer once, with no confirmation.
 - The phone's settings are yours to use with phone_control: torch, volume, mute, Do Not Disturb, music (play, pause, next, previous), alarms, timers, and the Wi-Fi and Bluetooth switches. You cannot set reminders yet; say so politely if asked.
-- For anything that needs several steps inside an app on the phone (send a WhatsApp to someone, post or change something in an app, find something in an app), use phone_task with the whole task in the user's words. Prefer the simpler tools when they fit: phone_action to just open something, reply_message to answer a notification, phone_control for settings. Never use phone_task for payments, banking or passwords.
 - To answer a message, use reply_message with the person's name and the exact words to send. It replies through the phone's notification, so it only works for messages that are still there.
 - You may be given who has messaged the user on the phone: senders and counts only. You never see what anyone wrote, so never guess or invent it; if asked what someone said, say they'll need to open the app to read it.
-- Calls come in two kinds. If the request to call someone also says anything to ask, tell or find out, you do the talking: use ai_call, as in "call Sam and ask if he's free" or "ring Sam and tell him I'm late".
+- You can't do things inside other apps on the phone (such as typing in an app or changing settings in an app), and you can't hold a phone call for the user. Say so politely if asked, and offer what you can do instead: open the app, place an ordinary call, or reply to a notification.
 - Act only on the user's latest message. Earlier requests in this conversation have already been dealt with, so never repeat them.
-- You never know how a call went until a message starting with "📞 Call to" appears. Never say that someone answered or what they said without one.
-- If it only says to call someone, with nothing to ask or tell them, the user will do the talking: use phone_action with action "call" and their name as the target. The phone looks up its own contacts, so you never need their number. Never say you don't have a number, even if an earlier call in this conversation went differently.
+- To call someone, the user does the talking: use phone_action with action "call" and their name as the target. The phone looks up its own contacts, so you never need their number. Never say you don't have a number, even if an earlier call in this conversation went differently.
 - For any weather question use get_weather, never web_search. Give the conditions in a sentence or two. If the result says live weather is unavailable, say when you last checked and do not present it as current.
 - Web searches are limited each day, so only use web_search when the answer really needs current information.
 - When asked to create a picture, use generate_image. It appears in the chat by itself. Never claim an image was made if the tool reported an error.
@@ -94,7 +92,7 @@ function tools(locked = false) {
       function: {
         name: "phone_action",
         description: "Do something on the user's Android phone: open an app or website, search, play music, navigate, call, text or email. " +
-          "A call here is for the user to talk themselves. If there's anything to ask or tell the person, use ai_call instead.",
+          "A call here is for the user to talk themselves.",
         parameters: {
           type: "object",
           properties: {
@@ -139,22 +137,6 @@ function tools(locked = false) {
     {
       type: "function",
       function: {
-        name: "phone_task",
-        description: "Do a task inside the apps on the user's Android phone by operating the screen (tapping, typing, scrolling), " +
-          "e.g. 'send Rahul a WhatsApp saying I'm late', 'turn on dark mode in Instagram', 'play my liked songs on Spotify'. " +
-          "The phone asks the user before sending, paying, posting or deleting anything.",
-        parameters: {
-          type: "object",
-          properties: {
-            goal: { type: "string", description: "The whole task, in the user's own words, including any message text exactly as they said it." },
-          },
-          required: ["goal"],
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
         name: "reply_message",
         description: "Reply to someone who messaged the user on WhatsApp, SMS, Instagram, Telegram or Messenger, through the phone's notification.",
         parameters: {
@@ -165,22 +147,6 @@ function tools(locked = false) {
             app: { type: "string", description: "Optional: the app, if the user said one (whatsapp, sms, instagram...)." },
           },
           required: ["to", "text"],
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "ai_call",
-        description: "Phone someone and hold the conversation yourself on the user's behalf, then report back in the chat. " +
-          "Use this whenever the user says to call someone and ask, tell or find out anything.",
-        parameters: {
-          type: "object",
-          properties: {
-            contact: { type: "string", description: "The person's name as the user said it, or the phone number if they gave one. Never invent a number." },
-            goal: { type: "string", description: "What to say or find out on the call, written as an instruction, using the user's own words where they matter." },
-          },
-          required: ["contact", "goal"],
         },
       },
     },
@@ -331,23 +297,6 @@ async function runTool(name, args, ctx) {
         ? `Sent to the phone: ${link.label}`
         : `Queued for the phone (${link.label}); it will appear when the Jarvis app is next opened there.`;
     }
-    case "phone_task": {
-      const say = (text) => { ctx.fixedReply = text; return text; };
-      if (ctx.phoneActed) return "That has already been done.";
-      const goal = String(args.goal || "").trim().slice(0, 500);
-      if (!goal) return say(`What would you like me to do on your phone, ${HONORIFIC()}?`);
-      ctx.phoneActed = true;
-      const action = { type: "phone_task", device: "phone", goal, label: goal };
-      if (ctx.device === "phone") {
-        ctx.actions.push(action);
-        return say(`On it, ${HONORIFIC()}. I'll tell you when it's done.`);
-      }
-      await enqueue("phone", action);
-      ctx.actions.push({ ...action, queued: true });
-      return say((await isOnline("phone"))
-        ? `I've asked your phone to do that, ${HONORIFIC()}. I'll report back when it's done.`
-        : `Your phone seems to be offline, ${HONORIFIC()}. It will start when the Jarvis app is next open there.`);
-    }
     case "phone_control":
     case "reply_message": {
       // The phone does these, then says this fixed reply, or what went wrong instead.
@@ -383,38 +332,6 @@ async function runTool(name, args, ctx) {
       return say((await isOnline("phone"))
         ? `I've sent that to your phone, ${HONORIFIC()}.`
         : `Your phone seems to be offline, ${HONORIFIC()}. It will happen when the Jarvis app is next open there.`);
-    }
-    case "ai_call": {
-      // These replies are fixed, not written by the AI: left to itself, it has claimed that calls were answered
-      // when no call had happened. Only the laptop's report can say how a call went.
-      const say = (text) => { ctx.fixedReply = text; return text; };
-      if (ctx.callRequested) return "That call has already been requested.";
-      const contact = String(args.contact || "").trim();
-      const goal = String(args.goal || "").trim();
-      // The AI has picked up people from earlier in the chat, which would ring the wrong person.
-      if (contact && !meantInLatestMessage(contact, ctx.text)) {
-        return `Don't call ${contact}: they aren't in the user's latest message. Act only on that message; earlier calls have already been dealt with.`;
-      }
-      ctx.callRequested = true;
-      if (!contact || !goal) return say(`Who should I call, ${HONORIFIC()}, and what should I ask them?`);
-      if (!(await isOnline("laptop"))) {
-        return say(`I can't make that call, ${HONORIFIC()}. Calls run on your laptop, and the Jarvis desktop app isn't open there. Please open it and ask again.`);
-      }
-      if (/^[+\d][\d\s()-]{2,}$/.test(contact)) {
-        await enqueue("laptop", { type: "ai_call", name: contact, number: contact.replace(/[^\d+]/g, ""), goal });
-        return say(`Your laptop is calling ${contact}, ${HONORIFIC()}, to do this: ${goal} I'll report back here when the call ends.`);
-      }
-      const action = { type: "ai_call", device: "phone", name: contact, goal, label: `Call ${contact}` };
-      if (ctx.device === "phone") {
-        ctx.actions.push(action);
-        return say("One moment."); // the phone replaces this once it has looked in its contacts
-      }
-      if (!(await isOnline("phone"))) {
-        return say(`I can't make that call yet, ${HONORIFIC()}. Names are looked up in your phone's contacts, and the Jarvis app isn't open there. Please open it and ask again, or give me the number.`);
-      }
-      await enqueue("phone", action);
-      ctx.actions.push({ ...action, queued: true });
-      return say(`I've asked your phone to find ${contact}, ${HONORIFIC()}. Your laptop will then call them to do this: ${goal} I'll report back here.`);
     }
     case "laptop_command": {
       const action = { type: "laptop_command", device: "laptop", command: args.command, label: args.command };

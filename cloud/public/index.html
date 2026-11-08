@@ -106,12 +106,6 @@
           <p class="muted small-text" id="wake-test-result"></p>
           <button id="wake-overlay" class="ghost" hidden>Let Jarvis open apps (alarms, timers, calls, links)</button>
         </div>
-        <div class="setting" id="agent-row" hidden>
-          <label>Do things inside my apps</label>
-          <p class="muted small-text" id="agent-status"></p>
-          <button id="agent-access" class="ghost">Allow accessibility access</button>
-          <button id="agent-app-info" class="ghost">App info</button>
-        </div>
         <div class="setting" id="inbox-row" hidden>
           <label>Messages and notifications</label>
           <p class="muted small-text" id="inbox-status"></p>
@@ -140,13 +134,6 @@
             <option value="en-US">English (US)</option>
             <option value="hi-IN">Hindi</option>
           </select>
-        </div>
-        <div class="setting" id="call-test" hidden>
-          <label for="call-test-number">Jarvis call test (experiment)</label>
-          <p class="muted small-text">Calls this number on speaker and Jarvis says it is an AI calling for you, then listens for 10 seconds. Only call someone who knows it's coming, and leave the phone on a table in a quiet room. Tap the notification when they answer.</p>
-          <input id="call-test-number" type="tel" placeholder="Phone number" autocomplete="off">
-          <button id="call-test-start" class="ghost">☎ Start test call</button>
-          <div id="call-test-result" class="muted small-text"></div>
         </div>
         <hr>
         <p class="muted small-text">Signed in as <b id="device-name"></b>.</p>

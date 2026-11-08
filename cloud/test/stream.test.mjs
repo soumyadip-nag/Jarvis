@@ -90,11 +90,11 @@ test("reasoning written as plain text stops the sentences, as cleanReply does", 
 });
 
 test("a streamed tool call still runs, and Jarvis's fixed words come in the finished reply", async () => {
-  replies = [streamed([], { toolCall: { name: "ai_call", arguments: '{"contact":"Kohen","goal":"Ask if he is free"}' } })];
-  const got = await events("call Kohen and ask if he's free");
+  replies = [streamed([], { toolCall: { name: "phone_control", arguments: '{"control":"torch_on"}' } })];
+  const got = await events("torch on");
   assert.equal(got.filter((e) => e.name === "sentence").length, 0);
   const done = got.at(-1).data;
-  assert.match(done.reply.content, /can't make that call|One moment/);
+  assert.equal(done.reply.content, "Torch on, sir.");
 });
 
 test("without asking for a stream, the reply comes back whole as before", async () => {

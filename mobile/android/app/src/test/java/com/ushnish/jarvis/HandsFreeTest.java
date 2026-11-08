@@ -36,4 +36,16 @@ public class HandsFreeTest {
         assertTrue(sleeps("Jarvis, stop listening."));
         assertFalse(ends("What time do I usually sleep?") || sleeps("What time do I usually sleep?"));
     }
+
+    @Test
+    public void onlyAClearYesSendsAReply() {
+        assertTrue(HandsFree.saidYes("Yes"));
+        assertTrue(HandsFree.saidYes("yeah go ahead"));
+        assertTrue(HandsFree.saidYes("Send it."));
+        assertFalse(HandsFree.saidYes("no"));
+        assertFalse(HandsFree.saidYes("wait"));
+        assertFalse(HandsFree.saidYes("not yet"));
+        assertFalse(HandsFree.saidYes(""));
+        assertFalse(HandsFree.saidYes(null));
+    }
 }

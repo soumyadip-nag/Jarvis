@@ -56,6 +56,9 @@ final class HandsFree {
     static final Pattern END_PHRASE = Pattern.compile(
         "^((thank you|thanks|ok|okay) )?(thats all|that is all|nothing else|never ?mind|thats it)( (jarvis|for now|thanks|thank you))?$");
     static final Pattern SLEEP_PHRASE = Pattern.compile("\\b(go to sleep|sleep mode|stop listening)\\b");
+    /** "yes", "yeah go ahead", "send it": anything else is a no. */
+    private static final Pattern YES = Pattern.compile(
+        "^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|send it|confirm|please do|go on|affirmative|correct|right)\\b.*");
     private static final int MAX_TURNS = 8;
     private static final int VOICED_SENTENCES = 4; // the server voices this many (api.mjs)
 
@@ -66,6 +69,10 @@ final class HandsFree {
     /** "That's all." -> "thats all" */
     static String plainWords(String text) {
         return text.toLowerCase(Locale.ROOT).replaceAll("[^a-z ]", "").replaceAll("\\s+", " ").trim();
+    }
+
+    static boolean saidYes(String answer) {
+        return answer != null && YES.matcher(plainWords(answer)).matches();
     }
 
     /** Whether the phone is locked: then whoever is speaking may not be the user, so nothing personal. */
@@ -87,7 +94,6 @@ final class HandsFree {
     private TextToSpeech tts;
     private volatile boolean ttsReady;
     private AudioFocusRequest focus;
-    private boolean handedOff;
     private volatile boolean callMode; // listening through Bluetooth headphones, which are then in "call" mode
 
     HandsFree(Context context, Status status) {
@@ -126,7 +132,6 @@ final class HandsFree {
                     outcome = Outcome.NEEDS_APP;
                     break;
                 }
-                if (handedOff) break; // a phone task has the screen now
             }
         } catch (Exception e) {
             Log.e("JarvisHandsFree", "conversation failed", e);
@@ -310,7 +315,6 @@ final class HandsFree {
         final List<String> sentences = new ArrayList<>();
         final Map<Integer, byte[]> audio = new HashMap<>(); // an empty array: the server couldn't voice it
         boolean done;
-        boolean handedOff; // a phone task started: it has the screen now, so the conversation ends
         boolean finished; // the connection closed: no more audio is coming
         String content = "";
         JSONArray actions = new JSONArray();
@@ -362,18 +366,12 @@ final class HandsFree {
         }
         if (shortened) say("The rest is in the app.");
 
-        synchronized (reply) {
-            if (reply.handedOff) {
-                handedOff = true;
-                return false;
-            }
-        }
         boolean needsApp = false;
         for (int i = 0; i < reply.actions.length(); i++) {
             JSONObject action = reply.actions.optJSONObject(i);
             if (action == null || action.optBoolean("queued")) continue;
             String type = action.optString("type");
-            if (type.equals("call_contact") || type.equals("ai_call") || type.equals("open_url")) needsApp = true;
+            if (type.equals("call_contact") || type.equals("open_url")) needsApp = true;
         }
         if (needsApp) say("Tap the notification and I'll finish that in the app, " + honorific() + ".");
         return needsApp;
@@ -454,7 +452,7 @@ final class HandsFree {
                 // A reply is read back and only sent on a clear yes.
                 if (action.optString("type").equals("reply_message") && !locked(context)) {
                     String answer = self.ask("Reply to " + action.optString("to") + ": " + action.optString("text") + ". Shall I send it?");
-                    if (!AgentRules.saidYes(answer)) {
+                    if (!saidYes(answer)) {
                         message.put("content", "All right, I haven't sent it, " + honorific + ".");
                         continue;
                     }
@@ -462,9 +460,6 @@ final class HandsFree {
                 }
                 String problem = PhoneControl.perform(context, action, honorific);
                 if (problem != null) message.put("content", problem);
-                else if (action.optString("type").equals("phone_task")) {
-                    synchronized (reply) { reply.handedOff = true; }
-                }
             }
         }
         synchronized (reply) {

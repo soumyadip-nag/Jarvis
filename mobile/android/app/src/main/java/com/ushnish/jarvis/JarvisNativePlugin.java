@@ -335,67 +335,6 @@ public class JarvisNativePlugin extends Plugin {
         call.resolve();
     }
 
-    // ───────── working inside other apps ─────────
-
-    @PluginMethod
-    public void agentStatus(PluginCall call) {
-        JSObject out = new JSObject();
-        out.put("allowed", JarvisAccessibility.allowed(getContext()));
-        out.put("connected", JarvisAccessibility.instance != null);
-        out.put("running", PhoneAgent.running);
-        call.resolve(out);
-    }
-
-    @PluginMethod
-    public void openAccessibilitySettings(PluginCall call) {
-        getContext().startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        call.resolve();
-    }
-
-    @PluginMethod
-    public void stopPhoneTask(PluginCall call) {
-        PhoneAgent.stop();
-        call.resolve();
-    }
-
-    /** For testing: the screen as the AI sees it. */
-    @PluginMethod
-    public void screenSnapshot(PluginCall call) {
-        JarvisAccessibility hands = JarvisAccessibility.instance;
-        JSObject out = new JSObject();
-        if (hands == null) {
-            out.put("error", "accessibility is off");
-        } else {
-            JarvisAccessibility.Screen screen = hands.read();
-            out.put("app", screen.appName);
-            out.put("pkg", screen.pkg);
-            out.put("screen", screen.text.toString());
-        }
-        call.resolve(out);
-    }
-
-    /** For testing: one step, as the agent would do it (risky taps are refused here rather than asked about). */
-    @PluginMethod
-    public void agentAct(PluginCall call) {
-        JarvisAccessibility hands = JarvisAccessibility.instance;
-        JSObject step = call.getObject("step", new JSObject());
-        new Thread(() -> {
-            JSObject out = new JSObject();
-            try {
-                if (hands == null) throw new IllegalStateException("accessibility is off");
-                JarvisAccessibility.Screen screen = hands.read();
-                if (AgentRules.isRisky(JarvisAccessibility.riskLabel(step, screen))) {
-                    out.put("result", "refused: risky");
-                } else {
-                    out.put("result", hands.act(step, screen));
-                }
-            } catch (Exception e) {
-                out.put("error", String.valueOf(e.getMessage()));
-            }
-            call.resolve(out);
-        }).start();
-    }
-
     /** Android blocks notification access for apps installed outside the Play Store until this is allowed. */
     @PluginMethod
     public void openAppInfo(PluginCall call) {
@@ -471,39 +410,6 @@ public class JarvisNativePlugin extends Plugin {
                 call.reject("Couldn't download the update: " + e.getMessage());
             }
         }).start();
-    }
-
-    // ───────── call test ─────────
-
-    /** See CallTestService. Only ever started from the test button in Settings, for a number typed there. */
-    @PluginMethod
-    public void startCallTest(PluginCall call) {
-        requestPermissionForAliases(new String[] { "phone", "microphone", "notifications" }, call, "callTestPermissions");
-    }
-
-    @PermissionCallback
-    private void callTestPermissions(PluginCall call) {
-        if (getPermissionState("phone") != PermissionState.GRANTED || getPermissionState("microphone") != PermissionState.GRANTED) {
-            call.reject("The call test needs the Phone and Microphone permissions.");
-            return;
-        }
-        String number = call.getString("number", "");
-        if (number == null || number.isEmpty()) {
-            call.reject("No number given.");
-            return;
-        }
-        try {
-            CallTestService.finished = call::resolve;
-            Intent service = new Intent(getContext(), CallTestService.class).putExtra("message", call.getString("message", ""));
-            ContextCompat.startForegroundService(getContext(), service);
-
-            Intent dial = new Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(number)));
-            dial.putExtra(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, true);
-            getActivity().startActivity(dial);
-        } catch (Exception e) {
-            CallTestService.finished = null;
-            call.reject("Couldn't start the call test: " + e.getMessage());
-        }
     }
 
     // ───────── listening ─────────

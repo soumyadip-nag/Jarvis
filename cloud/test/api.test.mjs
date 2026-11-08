@@ -216,18 +216,26 @@ test("asked from the laptop, a call is queued for the phone", async () => {
   await call("POST", `commands/${command.id}/done`, { token: phone });
 });
 
-test("a question can only use one web search, then has to answer", async () => {
+// The test above uses up today's searches, so these run on another day. (They used to rely on New Zealand
+// already being on a different date from India, which is only true for part of the day.)
+async function onAnotherDay(days, run) {
+  const realNow = Date.now;
+  Date.now = () => realNow() + days * 86_400_000;
+  try { return await run(); } finally { Date.now = realNow; }
+}
+
+test("a question can only use one web search, then has to answer", () => onAnotherDay(2, async () => {
   const before = searches.length;
   const { data } = await call("POST", "chat", { token: laptop, body: { text: "Keep searching", tz: "Pacific/Auckland" } });
   assert.equal(searches.length, before + 1);
   assert.equal(data.reply.content, "Here is what I found, sir.");
-});
+}));
 
-test("a tool call attempted during the final answer is retried", async () => {
+test("a tool call attempted during the final answer is retried", () => onAnotherDay(3, async () => {
   const { data } = await call("POST", "chat", { token: laptop, body: { text: "Hiccup", tz: "Pacific/Auckland" } });
   assert.equal(hiccuped, true);
   assert.equal(data.reply.content, "Here is what I found, sir.");
-});
+}));
 
 test("leaked reasoning never reaches the reply", async () => {
   const { cleanReply } = await import("../lib/brain.mjs");
