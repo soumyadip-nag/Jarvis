@@ -104,7 +104,20 @@
           </label>
           <button id="wake-test" class="ghost">Test my voice</button>
           <p class="muted small-text" id="wake-test-result"></p>
-          <button id="wake-overlay" class="ghost" hidden>Let Jarvis open the app for calls and links</button>
+          <button id="wake-overlay" class="ghost" hidden>Let Jarvis open apps (alarms, timers, calls, links)</button>
+        </div>
+        <div class="setting" id="inbox-row" hidden>
+          <label>Messages and notifications</label>
+          <p class="muted small-text" id="inbox-status"></p>
+          <button id="inbox-access" class="ghost">Allow notification access</button>
+          <button id="inbox-app-info" class="ghost">App info</button>
+          <label><input type="checkbox" id="briefing"> Tell me who messaged when I'm back after</label>
+          <select id="brief-after">
+            <option value="1">1 hour away</option>
+            <option value="2">2 hours away</option>
+            <option value="4">4 hours away</option>
+            <option value="8">8 hours away</option>
+          </select>
         </div>
         <div class="setting toggle" id="confirm-calls-row" hidden><label><input type="checkbox" id="confirm-calls"> Ask before placing a call</label></div>
         <div class="setting">

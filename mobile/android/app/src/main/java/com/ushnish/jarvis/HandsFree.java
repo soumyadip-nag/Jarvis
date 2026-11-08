@@ -220,6 +220,51 @@ final class HandsFree {
         return null;
     }
 
+    /** Says something unprompted (the "while you were away" briefing) in Jarvis's voice, or the phone's if that fails. */
+    void announce(String text) {
+        try {
+            byte[] mp3 = null;
+            try {
+                mp3 = fetchVoice(text);
+            } catch (Exception e) {
+                Log.w("JarvisHandsFree", "voice failed", e);
+            }
+            if (mp3 != null && mp3.length > 0) play(mp3);
+            else say(text);
+        } catch (Exception e) {
+            Log.e("JarvisHandsFree", "announce failed", e);
+        } finally {
+            abandonFocus();
+            if (tts != null) main.post(() -> tts.shutdown());
+        }
+    }
+
+    private byte[] fetchVoice(String text) throws Exception {
+        if (!ready(context)) return null;
+        HttpURLConnection connection = (HttpURLConnection) new URL(prefs.getString("server", "") + "/api/speak").openConnection();
+        try {
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(20000);
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Authorization", "Bearer " + prefs.getString("token", ""));
+            try (OutputStream out = connection.getOutputStream()) {
+                out.write(new JSONObject().put("text", text).toString().getBytes(StandardCharsets.UTF_8));
+            }
+            if (connection.getResponseCode() != 200) return null;
+            try (java.io.InputStream in = connection.getInputStream()) {
+                java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                byte[] buffer = new byte[16384];
+                int n;
+                while ((n = in.read(buffer)) != -1) bytes.write(buffer, 0, n);
+                return bytes.toByteArray();
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+
     // ───────── talking to the server ─────────
 
     /** The reply as it streams in: its sentences, and the audio the server made for the first few. */
@@ -310,6 +355,8 @@ final class HandsFree {
                 .put("text", text)
                 .put("tz", TimeZone.getDefault().getID())
                 .put("voice", true);
+            String inbox = JarvisNotifications.summaryForAi(context);
+            if (inbox != null) body.put("notifications", inbox);
             try (OutputStream out = connection.getOutputStream()) {
                 out.write(body.toString().getBytes(StandardCharsets.UTF_8));
             }
@@ -327,7 +374,7 @@ final class HandsFree {
                     if (line.startsWith("event: ")) event = line.substring(7);
                     else if (line.startsWith("data: ")) data.append(line.substring(6));
                     else if (line.isEmpty() && event != null) {
-                        handle(reply, event, new JSONObject(data.length() > 0 ? data.toString() : "{}"));
+                        handle(reply, event, new JSONObject(data.length() > 0 ? data.toString() : "{}"), context, honorific());
                         event = null;
                         data.setLength(0);
                     }
@@ -346,7 +393,19 @@ final class HandsFree {
         }
     }
 
-    private static void handle(Reply reply, String event, JSONObject data) throws Exception {
+    private static void handle(Reply reply, String event, JSONObject data, Context context, String honorific) throws Exception {
+        if (event.equals("done")) {
+            // Torch, volume, replies and the like happen here, before the reply is read out: if one can't be done,
+            // what went wrong is said instead.
+            JSONArray actions = data.optJSONArray("actions");
+            JSONObject message = data.optJSONObject("reply");
+            for (int i = 0; actions != null && message != null && i < actions.length(); i++) {
+                JSONObject action = actions.optJSONObject(i);
+                if (action == null || !PhoneControl.isPhoneAction(action)) continue;
+                String problem = PhoneControl.perform(context, action, honorific);
+                if (problem != null) message.put("content", problem);
+            }
+        }
         synchronized (reply) {
             switch (event) {
                 case "sentence":

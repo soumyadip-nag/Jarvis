@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.ContactsContract;
 import android.provider.Settings;
@@ -212,7 +213,9 @@ public class JarvisNativePlugin extends Plugin {
             String value = call.getString(key);
             if (value != null) prefs.putString(key, value);
         }
-        for (String key : new String[] { "rate", "pitch", "threshold" }) {
+        Boolean briefing = call.getBoolean("briefing");
+        if (briefing != null) prefs.putBoolean("briefing", briefing);
+        for (String key : new String[] { "rate", "pitch", "threshold", "briefAfterHours" }) {
             Float value = call.getFloat(key);
             if (value != null) prefs.putFloat(key, value);
         }
@@ -286,6 +289,58 @@ public class JarvisNativePlugin extends Plugin {
         status.put("canOpenItself", Settings.canDrawOverlays(getContext()));
         if (WakeWordService.problem != null) status.put("problem", WakeWordService.problem);
         return status;
+    }
+
+    // ───────── the phone's notifications and settings ─────────
+
+    /** A phone_control or reply_message action from the server. Resolves {error} if it couldn't be done. */
+    @PluginMethod
+    public void phoneAction(PluginCall call) {
+        JSObject action = call.getObject("action", new JSObject());
+        String honorific = getContext().getSharedPreferences(HandsFree.PREFS, 0).getString("honorific", "sir");
+        new Thread(() -> {
+            JSObject out = new JSObject();
+            String problem = PhoneControl.perform(getContext(), action, honorific);
+            if (problem != null) out.put("error", problem);
+            call.resolve(out);
+        }).start();
+    }
+
+    /** Senders and counts of unread messages for the AI ("who messaged me?"), or nothing without access. */
+    @PluginMethod
+    public void inboxSummary(PluginCall call) {
+        JSObject out = new JSObject();
+        out.put("allowed", JarvisNotifications.allowed(getContext()));
+        String summary = JarvisNotifications.summaryForAi(getContext());
+        if (summary != null) out.put("summary", summary);
+        call.resolve(out);
+    }
+
+    @PluginMethod
+    public void openNotificationAccess(PluginCall call) {
+        Intent settings;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            settings = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                    new android.content.ComponentName(getContext(), JarvisNotifications.class).flattenToString());
+        } else {
+            settings = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+        }
+        settings.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getContext().startActivity(settings);
+        } catch (RuntimeException e) {
+            getContext().startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        }
+        call.resolve();
+    }
+
+    /** Android blocks notification access for apps installed outside the Play Store until this is allowed. */
+    @PluginMethod
+    public void openAppInfo(PluginCall call) {
+        getContext().startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getContext().getPackageName()))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        call.resolve();
     }
 
     // ───────── updates ─────────

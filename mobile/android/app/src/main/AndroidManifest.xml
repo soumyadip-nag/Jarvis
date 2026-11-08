@@ -35,6 +35,18 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- Who has messaged (senders and counts), "while you were away", and replying from notifications.
+             Only works once the user turns on "Notification access" for Jarvis. -->
+        <service
+            android:name=".JarvisNotifications"
+            android:exported="true"
+            android:label="Jarvis"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -61,6 +73,8 @@
     <!-- So that "Hey Jarvis" can open Jarvis by itself; the user turns this on in Android's settings. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Alarms and timers by voice, set in the phone's clock app. -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
     <!-- Android hides these services from apps unless they are declared here. -->
     <queries>

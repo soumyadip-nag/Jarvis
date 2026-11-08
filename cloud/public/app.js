@@ -14,7 +14,7 @@
   };
   const defaultLang = ["en-IN", "en-GB", "en-US", "hi-IN"].includes(navigator.language) ? navigator.language : "en-IN";
   const settings = Object.assign(
-    { voice: "jarvis", rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang, wakeWord: true, wakeSensitivity: "normal" },
+    { voice: "jarvis", rate: 0.95, pitch: 0.85, autoSpeak: true, autoOpen: true, confirmCalls: false, lang: defaultLang, wakeWord: true, wakeSensitivity: "normal", briefing: true, briefAfterHours: 2 },
     store.get("settings", {}),
   );
   const saveSettings = () => { store.set("settings", settings); pushWakeSettings(); };
@@ -515,11 +515,11 @@
   }
 
   /** Sends a message and passes each sentence of the reply on as it's written. Returns what api("chat") would. */
-  async function chatStreaming(text, onSentence, voice) {
+  async function chatStreaming(text, onSentence, voice, notifications) {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream", Authorization: "Bearer " + token },
-      body: JSON.stringify({ text, tz, voice: !!voice }),
+      body: JSON.stringify({ text, tz, voice: !!voice, ...(notifications ? { notifications } : {}) }),
     });
     if (!(res.headers.get("content-type") || "").includes("event-stream")) {
       const data = await res.json().catch(() => ({}));
@@ -744,6 +744,7 @@
     return {
       server: location.origin, token, lang: settings.lang, honorific: profile.honorific || "sir",
       rate: settings.rate, pitch: settings.pitch, threshold: WAKE_THRESHOLDS[settings.wakeSensitivity] || 0.35,
+      briefing: !!settings.briefing, briefAfterHours: Number(settings.briefAfterHours) || 2,
     };
   }
 
@@ -754,6 +755,17 @@
   function startWakeWord() {
     if (!Native || !settings.wakeWord || asleep) return;
     Native("startWakeWord", wakeSettings()).then(showWakeStatus).catch((e) => showWakeStatus({ problem: e.message }));
+  }
+
+  /** Whether Jarvis can see notifications: needed for "who messaged me", replies and the briefing. */
+  async function showInboxStatus() {
+    if (!Native) return;
+    const { allowed } = await Native("inboxSummary").catch(() => ({}));
+    $("#inbox-status").textContent = allowed
+      ? "On: I can tell you who has messaged (never what they wrote), reply for you, and brief you when you're back."
+      : "Off. Tap below and turn on Jarvis. If Android says it's a restricted setting, open App info, tap ⋮ (top right), choose \"Allow restricted settings\", then try again.";
+    $("#inbox-access").hidden = !!allowed;
+    $("#inbox-app-info").hidden = !!allowed;
   }
 
   /** "Test my voice": shows how sure the detector was, so the sensitivity can be set to suit. */
@@ -867,6 +879,8 @@
     setState("thinking", "Thinking");
     try {
       const voice = settings.autoSpeak && settings.voice === "jarvis" ? voiceQueue() : null;
+      // Who has messaged on the phone, so "who texted me?" can be answered: senders and counts, never what they wrote.
+      const inbox = Native ? await Native("inboxSummary").catch(() => ({})) : {};
       const streamed = [];
       let live = null;
       const data = await chatStreaming(text, (sentence, index) => {
@@ -875,11 +889,17 @@
         live.querySelector(".body").textContent = streamed.join(" ");
         scrollDown();
         voice?.add(sentence, index);
-      }, voice);
+      }, voice, inbox.summary);
       live?.remove(); // replaced by the finished reply below, with its actions
       seen.add(data.user.id);
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
+      for (const a of data.actions.filter((a) => (a.type === "phone_control" || a.type === "reply_message") && !a.queued)) {
+        const done = Native
+          ? await Native("phoneAction", { action: a }).catch((e) => ({ error: e.message }))
+          : { error: `That only works in the Jarvis app on your phone, ${profile.honorific}.` };
+        if (done.error) data.reply.content = done.error;
+      }
       const aiCall = data.actions.find((a) => a.type === "ai_call" && !a.queued);
       if (aiCall) {
         data.reply.content = await startAiCall(aiCall).catch((e) => `I couldn't start that call, ${profile.honorific}: ${e.message}`);
@@ -955,6 +975,11 @@
         renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${outcome.say}`, actions: [cmd] });
         navigator.vibrate?.(120);
         if (outcome.contact && settings.autoOpen) openUrl(telUrl(outcome.contact.tel));
+      } else if (cmd.type === "phone_control" || cmd.type === "reply_message") {
+        const done = Native ? await Native("phoneAction", { action: cmd }).catch((e) => ({ error: e.message })) : { error: "This needs the phone app." };
+        const say = done.error || (cmd.type === "reply_message" ? `Sent to ${cmd.to}: "${cmd.text}"` : `${cmd.confirm}.`);
+        renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${say}` });
+        navigator.vibrate?.(120);
       }
     } finally {
       await api(`commands/${cmd.id}/done`, { method: "POST" }).catch(() => {});
@@ -1168,6 +1193,14 @@
       if (settings.wakeWord) { asleep = false; startWakeWord(); }
       else Native("stopWakeWord").then(showWakeStatus).catch(() => {});
     };
+    $("#inbox-row").hidden = !Native;
+    $("#briefing").checked = settings.briefing;
+    $("#briefing").onchange = (e) => { settings.briefing = e.target.checked; saveSettings(); };
+    $("#brief-after").value = String(settings.briefAfterHours);
+    $("#brief-after").onchange = (e) => { settings.briefAfterHours = Number(e.target.value); saveSettings(); };
+    $("#inbox-access").onclick = () => Native("openNotificationAccess").catch((e) => systemMessage(e.message));
+    $("#inbox-app-info").onclick = () => Native("openAppInfo").catch((e) => systemMessage(e.message));
+    showInboxStatus();
     $("#wake-sensitivity").value = settings.wakeSensitivity;
     $("#wake-sensitivity").onchange = (e) => { settings.wakeSensitivity = e.target.value; saveSettings(); };
     $("#wake-test").onclick = () => testWakeWord().catch((e) => { $("#wake-test-result").textContent = e.message; });
@@ -1196,7 +1229,7 @@
     $("#install").onclick = async () => { if (installPrompt) { installPrompt.prompt(); installPrompt = null; $("#install").hidden = true; } };
 
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) { lastActivity = Date.now(); if (token) sync(); checkForUpdate(); }
+      if (!document.hidden) { lastActivity = Date.now(); if (token) sync(); checkForUpdate(); showInboxStatus(); }
     });
 
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

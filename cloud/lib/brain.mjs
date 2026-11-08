@@ -66,7 +66,9 @@ Devices and actions:
 - If they don't say which device, act on the one they are using (${device}).
 - After an action on a device, confirm in a few words (for example "Done, ${HONORIFIC()}." or "Opening YouTube."). Don't read out URLs.
 - After looking something up, such as the weather, just give the answer once, with no confirmation.
-- You cannot set alarms or reminders yet; say so politely if asked.
+- The phone's settings are yours to use with phone_control: torch, volume, mute, Do Not Disturb, music (play, pause, next, previous), alarms, timers, and the Wi-Fi and Bluetooth switches. You cannot set reminders yet; say so politely if asked.
+- To answer a message, use reply_message with the person's name and the exact words to send. It replies through the phone's notification, so it only works for messages that are still there.
+- You may be given who has messaged the user on the phone: senders and counts only. You never see what anyone wrote, so never guess or invent it; if asked what someone said, say they'll need to open the app to read it.
 - Calls come in two kinds. If the request to call someone also says anything to ask, tell or find out, you do the talking: use ai_call, as in "call Sam and ask if he's free" or "ring Sam and tell him I'm late".
 - Act only on the user's latest message. Earlier requests in this conversation have already been dealt with, so never repeat them.
 - You never know how a call went until a message starting with "📞 Call to" appears. Never say that someone answered or what they said without one.
@@ -101,6 +103,45 @@ function tools() {
             text: { type: "string", description: "Optional message body for sms / whatsapp / email." },
           },
           required: ["action", "target"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "phone_control",
+        description: "Change a setting on the user's Android phone: torch, volume, mute, Do Not Disturb, music playback, an alarm, a timer, or Wi-Fi / Bluetooth.",
+        parameters: {
+          type: "object",
+          properties: {
+            control: {
+              type: "string",
+              enum: ["torch_on", "torch_off", "volume", "volume_up", "volume_down", "mute", "unmute", "dnd_on", "dnd_off",
+                "play", "pause", "next", "previous", "alarm", "timer", "wifi", "bluetooth"],
+            },
+            level: { type: "integer", description: "For volume: 0 to 100 percent." },
+            hour: { type: "integer", description: "For an alarm: hour, 0 to 23." },
+            minute: { type: "integer", description: "For an alarm: minute, 0 to 59." },
+            seconds: { type: "integer", description: "For a timer: its length in seconds." },
+            label: { type: "string", description: "Optional name for an alarm or timer." },
+          },
+          required: ["control"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "reply_message",
+        description: "Reply to someone who messaged the user on WhatsApp, SMS, Instagram, Telegram or Messenger, through the phone's notification.",
+        parameters: {
+          type: "object",
+          properties: {
+            to: { type: "string", description: "The person or group's name as the user said it." },
+            text: { type: "string", description: "Exactly what to send, in the user's words." },
+            app: { type: "string", description: "Optional: the app, if the user said one (whatsapp, sms, instagram...)." },
+          },
+          required: ["to", "text"],
         },
       },
     },
@@ -220,6 +261,25 @@ function meantInLatestMessage(contact, text) {
   return /\b(him|her|them|again|same|back)\b/.test(said);
 }
 
+/** What Jarvis says once a phone setting is changed, or null for a control it doesn't know. */
+export function phoneControlConfirmation(control, args = {}) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const seconds = Math.round(Number(args.seconds) || 0);
+  const minutes = Math.round(seconds / 60);
+  const length = seconds < 60 ? `${seconds} seconds` : minutes === 1 ? "1 minute" : `${minutes} minutes`;
+  const level = Math.max(0, Math.min(100, Math.round(Number(args.level ?? 50) || 0)));
+  return {
+    torch_on: "Torch on", torch_off: "Torch off",
+    volume: `Volume at ${level} percent`,
+    volume_up: "Volume up", volume_down: "Volume down", mute: "Muted", unmute: "Unmuted",
+    dnd_on: "Do Not Disturb is on", dnd_off: "Do Not Disturb is off",
+    play: "Playing", pause: "Paused", next: "Next track", previous: "Previous track",
+    alarm: `Alarm set for ${pad(Number(args.hour) || 0)}:${pad(Number(args.minute) || 0)}`,
+    timer: `Timer set for ${length}`,
+    wifi: "Here's the Wi-Fi switch", bluetooth: "Here are the Bluetooth settings",
+  }[control] || null;
+}
+
 /** Execute one tool call. Returns the text fed back to the model. Collects device actions in ctx. */
 async function runTool(name, args, ctx) {
   switch (name) {
@@ -246,6 +306,42 @@ async function runTool(name, args, ctx) {
       return (await isOnline("phone"))
         ? `Sent to the phone: ${link.label}`
         : `Queued for the phone (${link.label}); it will appear when the Jarvis app is next opened there.`;
+    }
+    case "phone_control":
+    case "reply_message": {
+      // The phone does these, then says this fixed reply, or what went wrong instead.
+      const say = (text) => { ctx.fixedReply = text; return text; };
+      if (ctx.phoneActed) return "That has already been done.";
+      let action;
+      if (name === "reply_message") {
+        const to = String(args.to || "").trim();
+        const words = String(args.text || "").trim().slice(0, 1000);
+        if (!to || !words) return say(`Who should I reply to, ${HONORIFIC()}, and what should I say?`);
+        if (!meantInLatestMessage(to, ctx.text)) {
+          return `Don't reply to ${to}: they aren't in the user's latest message. Act only on that message.`;
+        }
+        action = { type: "reply_message", device: "phone", to, text: words, app: String(args.app || ""), label: `Reply to ${to}` };
+      } else {
+        const control = String(args.control || "");
+        const confirm = phoneControlConfirmation(control, args);
+        if (!confirm) return "Unknown control.";
+        action = { type: "phone_control", device: "phone", control, label: confirm, confirm };
+        for (const key of ["level", "hour", "minute", "seconds"]) {
+          if (args[key] !== undefined && Number.isFinite(Number(args[key]))) action[key] = Math.round(Number(args[key]));
+        }
+        if (args.label) action.name = String(args.label).slice(0, 60);
+      }
+      ctx.phoneActed = true;
+      const done = name === "reply_message" ? `Sent to ${action.to}, ${HONORIFIC()}: "${action.text}"` : `${action.confirm}, ${HONORIFIC()}.`;
+      if (ctx.device === "phone") {
+        ctx.actions.push(action);
+        return say(done);
+      }
+      await enqueue("phone", action);
+      ctx.actions.push({ ...action, queued: true });
+      return say((await isOnline("phone"))
+        ? `I've sent that to your phone, ${HONORIFIC()}.`
+        : `Your phone seems to be offline, ${HONORIFIC()}. It will happen when the Jarvis app is next open there.`);
     }
     case "ai_call": {
       // These replies are fixed, not written by the AI: left to itself, it has claimed that calls were answered
@@ -385,7 +481,7 @@ function sentenceStream(onSentence) {
   };
 }
 
-export async function respond({ text, device, tz, defer = (p) => p, onSentence }) {
+export async function respond({ text, device, tz, defer = (p) => p, onSentence, notifications }) {
   const spoken = sentenceStream(onSentence);
   const now = localTime(tz);
   const history = (await recentMessages()).slice(-RECENT_MESSAGES);
@@ -396,6 +492,10 @@ export async function respond({ text, device, tz, defer = (p) => p, onSentence }
     { role: "system", content: persona(device, now) },
     ...(memories.length
       ? [{ role: "system", content: "Things you know about the user (from memory):\n" + memories.map((m) => "- " + m).join("\n") }]
+      : []),
+    // From the phone: who has messaged, senders and counts only. Not saved anywhere.
+    ...(device === "phone" && typeof notifications === "string" && notifications.trim()
+      ? [{ role: "system", content: "Unread on the user's phone right now (senders and counts only; you cannot see what they wrote):\n" + notifications.slice(0, 2000) }]
       : []),
     ...history.map((m) => ({
       role: m.role,

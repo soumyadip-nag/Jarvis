@@ -49,6 +49,12 @@ await new Promise((r) => setTimeout(r, 20000));
 console.log("wakeWordStatus after 20s:", await native("wakeWordStatus"));
 console.log("takeWake:", await native("takeWake"));
 console.log("stopWakeWord:", await native("stopWakeWord"));
+// Phone controls and notifications (no notification access on the emulator, so replies say so).
+console.log("inboxSummary:", await native("inboxSummary"));
+console.log("phoneAction volume:", await native("phoneAction", { action: { type: "phone_control", control: "volume", level: 40 } }));
+console.log("phoneAction torch:", await native("phoneAction", { action: { type: "phone_control", control: "torch_on" } }));
+console.log("phoneAction pause:", await native("phoneAction", { action: { type: "phone_control", control: "pause" } }));
+console.log("phoneAction reply:", await native("phoneAction", { action: { type: "reply_message", to: "Rahul", text: "hi" } }));
 console.log("checkUpdate:", await native("checkUpdate"));
 console.log("installUpdate:", await native("installUpdate")); // should end at Android's install prompt
 socket.close();

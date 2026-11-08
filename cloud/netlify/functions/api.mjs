@@ -42,7 +42,7 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
   await touch(device);
 
   if (route === "POST /chat") {
-    const { text, tz, voice: wantsVoice } = await body(req);
+    const { text, tz, voice: wantsVoice, notifications } = await body(req);
     if (!text || typeof text !== "string" || text.length > 4000) return json({ error: "Invalid text" }, 400);
     const defer = (promise) => (context?.waitUntil ? context.waitUntil(promise) : promise);
     if ((req.headers.get("accept") || "").includes("text/event-stream")) {
@@ -64,7 +64,7 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
             }
           };
           try {
-            event("done", await respond({ text: text.trim(), device, tz, defer, onSentence }));
+            event("done", await respond({ text: text.trim(), device, tz, defer, onSentence, notifications }));
             await Promise.all(voiced);
           } catch (e) {
             console.error("chat failed:", e);
@@ -76,7 +76,7 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
       });
       return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
     }
-    return json(await respond({ text: text.trim(), device, tz, defer }));
+    return json(await respond({ text: text.trim(), device, tz, defer, notifications }));
   }
 
   if (route === "GET /sync") {
