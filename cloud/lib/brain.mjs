@@ -67,6 +67,7 @@ Devices and actions:
 - After an action on a device, confirm in a few words (for example "Done, ${HONORIFIC()}." or "Opening YouTube."). Don't read out URLs.
 - After looking something up, such as the weather, just give the answer once, with no confirmation.
 - The phone's settings are yours to use with phone_control: torch, volume, mute, Do Not Disturb, music (play, pause, next, previous), alarms, timers, and the Wi-Fi and Bluetooth switches. You cannot set reminders yet; say so politely if asked.
+- For anything that needs several steps inside an app on the phone (send a WhatsApp to someone, post or change something in an app, find something in an app), use phone_task with the whole task in the user's words. Prefer the simpler tools when they fit: phone_action to just open something, reply_message to answer a notification, phone_control for settings. Never use phone_task for payments, banking or passwords.
 - To answer a message, use reply_message with the person's name and the exact words to send. It replies through the phone's notification, so it only works for messages that are still there.
 - You may be given who has messaged the user on the phone: senders and counts only. You never see what anyone wrote, so never guess or invent it; if asked what someone said, say they'll need to open the app to read it.
 - Calls come in two kinds. If the request to call someone also says anything to ask, tell or find out, you do the talking: use ai_call, as in "call Sam and ask if he's free" or "ring Sam and tell him I'm late".
@@ -126,6 +127,22 @@ function tools() {
             label: { type: "string", description: "Optional name for an alarm or timer." },
           },
           required: ["control"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "phone_task",
+        description: "Do a task inside the apps on the user's Android phone by operating the screen (tapping, typing, scrolling), " +
+          "e.g. 'send Rahul a WhatsApp saying I'm late', 'turn on dark mode in Instagram', 'play my liked songs on Spotify'. " +
+          "The phone asks the user before sending, paying, posting or deleting anything.",
+        parameters: {
+          type: "object",
+          properties: {
+            goal: { type: "string", description: "The whole task, in the user's own words, including any message text exactly as they said it." },
+          },
+          required: ["goal"],
         },
       },
     },
@@ -306,6 +323,23 @@ async function runTool(name, args, ctx) {
       return (await isOnline("phone"))
         ? `Sent to the phone: ${link.label}`
         : `Queued for the phone (${link.label}); it will appear when the Jarvis app is next opened there.`;
+    }
+    case "phone_task": {
+      const say = (text) => { ctx.fixedReply = text; return text; };
+      if (ctx.phoneActed) return "That has already been done.";
+      const goal = String(args.goal || "").trim().slice(0, 500);
+      if (!goal) return say(`What would you like me to do on your phone, ${HONORIFIC()}?`);
+      ctx.phoneActed = true;
+      const action = { type: "phone_task", device: "phone", goal, label: goal };
+      if (ctx.device === "phone") {
+        ctx.actions.push(action);
+        return say(`On it, ${HONORIFIC()}. I'll tell you when it's done.`);
+      }
+      await enqueue("phone", action);
+      ctx.actions.push({ ...action, queued: true });
+      return say((await isOnline("phone"))
+        ? `I've asked your phone to do that, ${HONORIFIC()}. I'll report back when it's done.`
+        : `Your phone seems to be offline, ${HONORIFIC()}. It will start when the Jarvis app is next open there.`);
     }
     case "phone_control":
     case "reply_message": {

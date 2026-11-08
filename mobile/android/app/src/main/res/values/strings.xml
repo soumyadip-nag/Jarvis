@@ -1,6 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="app_name">Jarvis</string>
+    <string name="accessibility_description">Lets Jarvis do tasks inside your apps when you ask, such as sending a message or changing a setting. It reads the screen and taps only during a task you asked for, asks you before sending, paying, posting or deleting anything, and never works in banking, payment or password apps.</string>
     <string name="title_activity_main">Jarvis</string>
     <string name="package_name">com.ushnish.jarvis</string>
     <string name="custom_url_scheme">com.ushnish.jarvis</string>

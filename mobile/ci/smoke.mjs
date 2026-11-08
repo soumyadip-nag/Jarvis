@@ -55,6 +55,18 @@ console.log("phoneAction volume:", await native("phoneAction", { action: { type:
 console.log("phoneAction torch:", await native("phoneAction", { action: { type: "phone_control", control: "torch_on" } }));
 console.log("phoneAction pause:", await native("phoneAction", { action: { type: "phone_control", control: "pause" } }));
 console.log("phoneAction reply:", await native("phoneAction", { action: { type: "reply_message", to: "Rahul", text: "hi" } }));
+// Working inside apps: read Jarvis's own screen, open Settings, read that, scroll, and come back.
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+console.log("agentStatus:", await native("agentStatus"));
+console.log("screen (Jarvis):", await native("screenSnapshot"));
+console.log("agentAct open Settings:", await native("agentAct", { step: { action: "open_app", name: "Settings" } }));
+await wait(3000);
+console.log("screen (Settings):", await native("screenSnapshot"));
+console.log("agentAct scroll:", await native("agentAct", { step: { action: "scroll", direction: "down" } }));
+console.log("agentAct open a banking app:", await native("agentAct", { step: { action: "open_app", name: "Pay" } }));
+console.log("phoneAction task without a sign-in:", await native("phoneAction", { action: { type: "phone_task", goal: "open settings" } }));
+console.log("agentAct back to Jarvis:", await native("agentAct", { step: { action: "open_app", name: "Jarvis" } }));
+await wait(2000);
 console.log("checkUpdate:", await native("checkUpdate"));
 console.log("installUpdate:", await native("installUpdate")); // should end at Android's install prompt
 socket.close();

@@ -81,6 +81,7 @@ final class HandsFree {
     private TextToSpeech tts;
     private volatile boolean ttsReady;
     private AudioFocusRequest focus;
+    private boolean handedOff;
     private volatile boolean callMode; // listening through Bluetooth headphones, which are then in "call" mode
 
     HandsFree(Context context, Status status) {
@@ -119,6 +120,7 @@ final class HandsFree {
                     outcome = Outcome.NEEDS_APP;
                     break;
                 }
+                if (handedOff) break; // a phone task has the screen now
             }
         } catch (Exception e) {
             Log.e("JarvisHandsFree", "conversation failed", e);
@@ -223,6 +225,15 @@ final class HandsFree {
     /** Says something unprompted (the "while you were away" briefing) in Jarvis's voice, or the phone's if that fails. */
     void announce(String text) {
         try {
+            speak(text);
+        } finally {
+            close();
+        }
+    }
+
+    /** Says something in Jarvis's voice, or the phone's if that fails. Call close() when finished talking. */
+    void speak(String text) {
+        try {
             byte[] mp3 = null;
             try {
                 mp3 = fetchVoice(text);
@@ -232,11 +243,32 @@ final class HandsFree {
             if (mp3 != null && mp3.length > 0) play(mp3);
             else say(text);
         } catch (Exception e) {
-            Log.e("JarvisHandsFree", "announce failed", e);
-        } finally {
-            abandonFocus();
-            if (tts != null) main.post(() -> tts.shutdown());
+            Log.e("JarvisHandsFree", "speaking failed", e);
         }
+    }
+
+    /**
+     * Asks a question out loud and returns the answer, "" if none. The "Hey Jarvis" listener lets go of the
+     * microphone meanwhile.
+     */
+    String ask(String question) throws InterruptedException {
+        speak(question);
+        boolean wasPaused = WakeWordService.paused;
+        WakeWordService.paused = true;
+        try {
+            Thread.sleep(300); // the wake-word thread releases the microphone
+            beep();
+            String heard = listen();
+            return heard == null ? "" : heard;
+        } finally {
+            WakeWordService.paused = wasPaused;
+        }
+    }
+
+    void close() {
+        abandonFocus();
+        if (tts != null) main.post(() -> tts.shutdown());
+        ttsReady = false;
     }
 
     private byte[] fetchVoice(String text) throws Exception {
@@ -272,6 +304,7 @@ final class HandsFree {
         final List<String> sentences = new ArrayList<>();
         final Map<Integer, byte[]> audio = new HashMap<>(); // an empty array: the server couldn't voice it
         boolean done;
+        boolean handedOff; // a phone task started: it has the screen now, so the conversation ends
         boolean finished; // the connection closed: no more audio is coming
         String content = "";
         JSONArray actions = new JSONArray();
@@ -323,6 +356,12 @@ final class HandsFree {
         }
         if (shortened) say("The rest is in the app.");
 
+        synchronized (reply) {
+            if (reply.handedOff) {
+                handedOff = true;
+                return false;
+            }
+        }
         boolean needsApp = false;
         for (int i = 0; i < reply.actions.length(); i++) {
             JSONObject action = reply.actions.optJSONObject(i);
@@ -404,6 +443,9 @@ final class HandsFree {
                 if (action == null || !PhoneControl.isPhoneAction(action)) continue;
                 String problem = PhoneControl.perform(context, action, honorific);
                 if (problem != null) message.put("content", problem);
+                else if (action.optString("type").equals("phone_task")) {
+                    synchronized (reply) { reply.handedOff = true; }
+                }
             }
         }
         synchronized (reply) {

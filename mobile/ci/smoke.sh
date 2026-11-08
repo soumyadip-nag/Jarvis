@@ -29,6 +29,9 @@ add_contact "Whatsapp Only" "919800000002@s.whatsapp.net" "vnd.android.cursor.it
 
 adb shell appops set "$PKG" REQUEST_INSTALL_PACKAGES allow
 for p in READ_CONTACTS CALL_PHONE RECORD_AUDIO POST_NOTIFICATIONS; do adb shell pm grant "$PKG" "android.permission.$p"; done
+# Accessibility, as the user would turn it on, so the screen reading can be tried (see smoke.mjs).
+adb shell settings put secure enabled_accessibility_services "$PKG/$PKG.JarvisAccessibility"
+adb shell settings put secure accessibility_enabled 1
 
 adb logcat -c
 adb shell am start -n "$PKG/.MainActivity"

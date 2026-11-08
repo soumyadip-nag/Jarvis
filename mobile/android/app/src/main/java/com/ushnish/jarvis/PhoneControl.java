@@ -29,6 +29,8 @@ final class PhoneControl {
         switch (action.optString("type")) {
             case "phone_control":
                 return run(context, action, honorific);
+            case "phone_task":
+                return PhoneAgent.start(context, action.optString("goal"), honorific);
             case "reply_message": {
                 JarvisNotifications listener = JarvisNotifications.instance;
                 if (listener == null) {
@@ -43,7 +45,7 @@ final class PhoneControl {
 
     static boolean isPhoneAction(JSONObject action) {
         String type = action.optString("type");
-        return !action.optBoolean("queued") && (type.equals("phone_control") || type.equals("reply_message"));
+        return !action.optBoolean("queued") && (type.equals("phone_control") || type.equals("reply_message") || type.equals("phone_task"));
     }
 
     static String run(Context context, JSONObject action, String honorific) {

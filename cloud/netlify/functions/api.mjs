@@ -18,6 +18,7 @@
 import { login, verify } from "../../lib/auth.mjs";
 import { runAsUser } from "../../lib/users.mjs";
 import { respond } from "../../lib/brain.mjs";
+import { nextStep, badStepRequest } from "../../lib/agent.mjs";
 import { addMessage, messagesSince, clearRecent } from "../../lib/messages.mjs";
 import { listMemories, addMemories, deleteMemory } from "../../lib/memory.mjs";
 import { getImage } from "../../lib/images.mjs";
@@ -92,6 +93,26 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
     if (!goal || typeof goal !== "string" || goal.length > 1000) return json({ error: "Invalid goal" }, 400);
     await enqueue("laptop", { type: "ai_call", name: String(name || digits).slice(0, 100), number: digits, goal });
     return json({ ok: true });
+  }
+
+  // A task inside the phone's apps: the next step, and how it went (see lib/agent.mjs).
+  if (route === "POST /agent/step") {
+    const request = await body(req);
+    const problem = badStepRequest(request);
+    if (problem) return json({ error: problem }, 400);
+    try {
+      return json({ action: await nextStep(request) });
+    } catch (e) {
+      console.error("agent step failed:", e.message);
+      return json({ action: { action: "fail", summary: "I couldn't reach my servers to carry on, so I stopped." } });
+    }
+  }
+
+  if (route === "POST /agent/report") {
+    const { goal, summary, ok } = await body(req);
+    if (typeof summary !== "string" || !summary.trim()) return json({ error: "Invalid report" }, 400);
+    const content = `📱 ${ok ? "Done" : "Not done"}: ${String(goal || "").slice(0, 200)}\n${summary.slice(0, 1000)}`;
+    return json({ message: await addMessage({ role: "assistant", content, device: "phone" }) });
   }
 
   if (route === "POST /calls/report") {

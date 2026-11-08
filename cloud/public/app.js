@@ -760,12 +760,23 @@
   /** Whether Jarvis can see notifications: needed for "who messaged me", replies and the briefing. */
   async function showInboxStatus() {
     if (!Native) return;
+    showAgentStatus();
     const { allowed } = await Native("inboxSummary").catch(() => ({}));
     $("#inbox-status").textContent = allowed
       ? "On: I can tell you who has messaged (never what they wrote), reply for you, and brief you when you're back."
       : "Off. Tap below and turn on Jarvis. If Android says it's a restricted setting, open App info, tap ⋮ (top right), choose \"Allow restricted settings\", then try again.";
     $("#inbox-access").hidden = !!allowed;
     $("#inbox-app-info").hidden = !!allowed;
+  }
+
+  /** Whether Jarvis can work inside other apps (Accessibility). */
+  async function showAgentStatus() {
+    const { allowed } = await Native("agentStatus").catch(() => ({}));
+    $("#agent-status").textContent = allowed
+      ? "On: ask me to do things inside your apps, like \"send Rahul a WhatsApp saying I'm late\". I ask before sending, paying, posting or deleting, and I never work in banking, payment or password apps. Stop me any time from the notification."
+      : "Off. Tap below, choose Jarvis and turn it on. If Android says it's a restricted setting, open App info, tap ⋮ (top right), choose \"Allow restricted settings\", then try again. While a task runs, what's on screen is sent to the AI.";
+    $("#agent-access").hidden = !!allowed;
+    $("#agent-app-info").hidden = !!allowed;
   }
 
   /** "Test my voice": shows how sure the detector was, so the sensitivity can be set to suit. */
@@ -894,7 +905,9 @@
       seen.add(data.user.id);
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
-      for (const a of data.actions.filter((a) => (a.type === "phone_control" || a.type === "reply_message") && !a.queued)) {
+      for (const a of data.actions.filter((a) => (a.type === "phone_control" || a.type === "reply_message" || a.type === "phone_task") && !a.queued)) {
+        // The phone carries on by itself (hands-free or after the app closes), so it needs the sign-in.
+        if (Native) await Native("setWakeSettings", wakeSettings()).catch(() => {});
         const done = Native
           ? await Native("phoneAction", { action: a }).catch((e) => ({ error: e.message }))
           : { error: `That only works in the Jarvis app on your phone, ${profile.honorific}.` };
@@ -975,9 +988,11 @@
         renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${outcome.say}`, actions: [cmd] });
         navigator.vibrate?.(120);
         if (outcome.contact && settings.autoOpen) openUrl(telUrl(outcome.contact.tel));
-      } else if (cmd.type === "phone_control" || cmd.type === "reply_message") {
+      } else if (cmd.type === "phone_control" || cmd.type === "reply_message" || cmd.type === "phone_task") {
+        if (Native) await Native("setWakeSettings", wakeSettings()).catch(() => {});
         const done = Native ? await Native("phoneAction", { action: cmd }).catch((e) => ({ error: e.message })) : { error: "This needs the phone app." };
-        const say = done.error || (cmd.type === "reply_message" ? `Sent to ${cmd.to}: "${cmd.text}"` : `${cmd.confirm}.`);
+        const say = done.error || (cmd.type === "reply_message" ? `Sent to ${cmd.to}: "${cmd.text}"`
+          : cmd.type === "phone_task" ? `Working on it: ${cmd.goal}` : `${cmd.confirm}.`);
         renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${say}` });
         navigator.vibrate?.(120);
       }
@@ -1193,6 +1208,9 @@
       if (settings.wakeWord) { asleep = false; startWakeWord(); }
       else Native("stopWakeWord").then(showWakeStatus).catch(() => {});
     };
+    $("#agent-row").hidden = !Native;
+    $("#agent-access").onclick = () => Native("openAccessibilitySettings").catch((e) => systemMessage(e.message));
+    $("#agent-app-info").onclick = () => Native("openAppInfo").catch((e) => systemMessage(e.message));
     $("#inbox-row").hidden = !Native;
     $("#briefing").checked = settings.briefing;
     $("#briefing").onchange = (e) => { settings.briefing = e.target.checked; saveSettings(); };
