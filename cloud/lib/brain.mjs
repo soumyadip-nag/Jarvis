@@ -81,7 +81,13 @@ Devices and actions:
 Current date and time for the user: ${now}.`;
 }
 
-function tools() {
+// With the phone locked, whoever is speaking may not be the user: only these, which reveal and change nothing personal.
+export const LOCKED_TOOLS = new Set(["get_weather", "web_search", "phone_control", "generate_image"]);
+const LOCKED_NOTE = "The phone is LOCKED, so the person speaking may not be the user. Answer general questions and use the tools you have, " +
+  "but share nothing personal: you have no access to their memories, messages, contacts or chat history right now. " +
+  "For anything personal, or to send messages, make calls or do tasks in apps, say politely that they need to unlock the phone first.";
+
+function tools(locked = false) {
   const list = [
     {
       type: "function",
@@ -266,7 +272,7 @@ function tools() {
       },
     });
   }
-  return list;
+  return locked ? list.filter((t) => LOCKED_TOOLS.has(t.function.name)) : list;
 }
 
 /** Whether the user's latest message names this person, or refers back to someone ("call him again"). */
@@ -299,6 +305,7 @@ export function phoneControlConfirmation(control, args = {}) {
 
 /** Execute one tool call. Returns the text fed back to the model. Collects device actions in ctx. */
 async function runTool(name, args, ctx) {
+  if (ctx.locked && !LOCKED_TOOLS.has(name)) return `Not available while the phone is locked. Tell the user to unlock it first, ${HONORIFIC()}.`;
   switch (name) {
     case "phone_action": {
       const link = phoneActionToUrl(args);
@@ -515,20 +522,22 @@ function sentenceStream(onSentence) {
   };
 }
 
-export async function respond({ text, device, tz, defer = (p) => p, onSentence, notifications }) {
+export async function respond({ text, device, tz, defer = (p) => p, onSentence, notifications, locked = false }) {
   const spoken = sentenceStream(onSentence);
   const now = localTime(tz);
-  const history = (await recentMessages()).slice(-RECENT_MESSAGES);
-  const userMsg = await addMessage({ role: "user", content: text, device });
-  const memories = await recall(text, 8);
+  // A locked phone gets nothing personal: no chat history, memories or messages (see LOCKED_TOOLS).
+  const history = locked ? [] : (await recentMessages()).slice(-RECENT_MESSAGES);
+  const userMsg = await addMessage({ role: "user", content: locked ? `🔒 ${text}` : text, device });
+  const memories = locked ? [] : await recall(text, 8);
 
   const messages = [
     { role: "system", content: persona(device, now) },
+    ...(locked ? [{ role: "system", content: LOCKED_NOTE }] : []),
     ...(memories.length
       ? [{ role: "system", content: "Things you know about the user (from memory):\n" + memories.map((m) => "- " + m).join("\n") }]
       : []),
     // From the phone: who has messaged, senders and counts only. Not saved anywhere.
-    ...(device === "phone" && typeof notifications === "string" && notifications.trim()
+    ...(!locked && device === "phone" && typeof notifications === "string" && notifications.trim()
       ? [{ role: "system", content: "Unread on the user's phone right now (senders and counts only; you cannot see what they wrote):\n" + notifications.slice(0, 2000) }]
       : []),
     ...history.map((m) => ({
@@ -538,7 +547,7 @@ export async function respond({ text, device, tz, defer = (p) => p, onSentence, 
     { role: "user", content: text },
   ];
 
-  const ctx = { device, tz, text, actions: [], remembered: false };
+  const ctx = { device, tz, text, actions: [], remembered: false, locked };
   let reply = "";
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
@@ -548,7 +557,7 @@ export async function respond({ text, device, tz, defer = (p) => p, onSentence, 
         reply = await finalAnswer(messages, 0.3, spoken.push);
         break;
       }
-      const msg = await chat({ messages, tools: tools(), onText: spoken.push });
+      const msg = await chat({ messages, tools: tools(locked), onText: spoken.push });
       if (!msg.tool_calls?.length) {
         reply = cleanReply(msg.content);
         break;
@@ -588,7 +597,8 @@ export async function respond({ text, device, tz, defer = (p) => p, onSentence, 
   const replyMsg = await addMessage({ role: "assistant", content: reply, device, actions: ctx.actions });
 
   // Asking for a call says nothing worth remembering, and Jarvis can't yet know how it went.
-  if (!ctx.remembered && !ctx.fixedReply) {
+  // Nor from a locked phone: a stranger shouldn't be able to plant memories.
+  if (!ctx.remembered && !ctx.fixedReply && !locked) {
     defer(extractAndStore({ userText: text, replyText: reply, now, known: memories }));
   }
   return { user: userMsg, reply: replyMsg, actions: ctx.actions };

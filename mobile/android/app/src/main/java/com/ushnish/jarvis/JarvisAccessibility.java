@@ -93,7 +93,7 @@ public class JarvisAccessibility extends AccessibilityService {
         String label = label(node);
         boolean editable = node.isEditable();
         boolean acts = node.isClickable() || node.isLongClickable() || node.isCheckable() || editable || node.isScrollable();
-        if (label.isEmpty() && !acts) return null;
+        if (!acts && (label.isEmpty() || !hasWords(node))) return null;
         String cls = node.getClassName() == null ? "" : node.getClassName().toString();
         String role = editable ? "field"
             : node.isCheckable() ? "toggle"
@@ -132,6 +132,12 @@ public class JarvisAccessibility extends AccessibilityService {
         }
         String id = node.getViewIdResourceName();
         return id == null ? "" : id.substring(id.lastIndexOf('/') + 1).replace('_', ' ');
+    }
+
+    /** Whether an item shows or describes something itself, rather than only having a layout id. */
+    private static boolean hasWords(AccessibilityNodeInfo node) {
+        return (node.getText() != null && node.getText().toString().trim().length() > 0)
+            || (node.getContentDescription() != null && node.getContentDescription().toString().trim().length() > 0);
     }
 
     /** An item's label with everything inside it, for deciding whether a tap is risky (a Send icon in a frame...). */

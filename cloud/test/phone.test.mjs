@@ -17,11 +17,13 @@ const toolCall = (name, args) => ({
 });
 const say = (content) => ({ choices: [{ message: { role: "assistant", content } }], usage: { total_tokens: 10 } });
 let lastPrompt = [];
+let lastTools = [];
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
   const body = JSON.parse(init.body);
   if (body.response_format) return new Response(JSON.stringify(say('{"memories":[]}')));
   lastPrompt = body.messages;
+  lastTools = (body.tools || []).map((t) => t.function.name);
   const last = body.messages.at(-1);
   if (last.role === "tool") return new Response(JSON.stringify(say("Done.")));
   const text = last.content;
@@ -107,4 +109,27 @@ test("confirmations", () => {
   assert.equal(phoneControlConfirmation("volume", { level: 140 }), "Volume at 100 percent");
   assert.equal(phoneControlConfirmation("timer", { seconds: 45 }), "Timer set for 45 seconds");
   assert.equal(phoneControlConfirmation("nope"), null);
+});
+
+test("a locked phone gets nothing personal and can't send or act", async () => {
+  await chat(phone, "remember that my locker code is 4321"); // some history to keep out
+  const inbox = "- 2 on WhatsApp from Mom, newest 3 min ago\n";
+  const { data } = await chat(phone, "reply to Rahul saying hi", { notifications: inbox, locked: true });
+  assert.equal(data.actions.length, 0);
+  assert.ok(lastTools.includes("phone_control"));
+  assert.deepEqual(lastTools.filter((t) => !["get_weather", "phone_control", "web_search", "generate_image"].includes(t)), []);
+  assert.ok(lastPrompt.some((m) => m.role === "system" && m.content.includes("The phone is LOCKED")));
+  assert.ok(!JSON.stringify(lastPrompt).includes("locker code"), "no chat history");
+  assert.ok(!JSON.stringify(lastPrompt).includes("from Mom"), "no messages");
+  assert.equal(data.user.content, "🔒 reply to Rahul saying hi");
+});
+
+test("simple controls still work when locked", async () => {
+  const { data } = await chat(phone, "turn the torch on", { locked: true });
+  assert.deepEqual(data.actions.map((a) => a.control), ["torch_on"]);
+});
+
+test("only a real true counts as locked", async () => {
+  await chat(phone, "who messaged me", { locked: "no" });
+  assert.ok(lastTools.includes("reply_message"));
 });

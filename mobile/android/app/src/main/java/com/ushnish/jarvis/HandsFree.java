@@ -68,6 +68,12 @@ final class HandsFree {
         return text.toLowerCase(Locale.ROOT).replaceAll("[^a-z ]", "").replaceAll("\\s+", " ").trim();
     }
 
+    /** Whether the phone is locked: then whoever is speaking may not be the user, so nothing personal. */
+    static boolean locked(Context context) {
+        android.app.KeyguardManager keyguard = context.getSystemService(android.app.KeyguardManager.class);
+        return keyguard != null && keyguard.isKeyguardLocked();
+    }
+
     /** Whether the page has signed in and passed on what a conversation needs. */
     static boolean ready(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -394,7 +400,9 @@ final class HandsFree {
                 .put("text", text)
                 .put("tz", TimeZone.getDefault().getID())
                 .put("voice", true);
-            String inbox = JarvisNotifications.summaryForAi(context);
+            boolean isLocked = locked(context);
+            if (isLocked) body.put("locked", true);
+            String inbox = isLocked ? null : JarvisNotifications.summaryForAi(context);
             if (inbox != null) body.put("notifications", inbox);
             try (OutputStream out = connection.getOutputStream()) {
                 out.write(body.toString().getBytes(StandardCharsets.UTF_8));
@@ -413,7 +421,7 @@ final class HandsFree {
                     if (line.startsWith("event: ")) event = line.substring(7);
                     else if (line.startsWith("data: ")) data.append(line.substring(6));
                     else if (line.isEmpty() && event != null) {
-                        handle(reply, event, new JSONObject(data.length() > 0 ? data.toString() : "{}"), context, honorific());
+                        handle(reply, event, new JSONObject(data.length() > 0 ? data.toString() : "{}"), this);
                         event = null;
                         data.setLength(0);
                     }
@@ -432,7 +440,9 @@ final class HandsFree {
         }
     }
 
-    private static void handle(Reply reply, String event, JSONObject data, Context context, String honorific) throws Exception {
+    private static void handle(Reply reply, String event, JSONObject data, HandsFree self) throws Exception {
+        Context context = self.context;
+        String honorific = self.honorific();
         if (event.equals("done")) {
             // Torch, volume, replies and the like happen here, before the reply is read out: if one can't be done,
             // what went wrong is said instead.
@@ -441,6 +451,15 @@ final class HandsFree {
             for (int i = 0; actions != null && message != null && i < actions.length(); i++) {
                 JSONObject action = actions.optJSONObject(i);
                 if (action == null || !PhoneControl.isPhoneAction(action)) continue;
+                // A reply is read back and only sent on a clear yes.
+                if (action.optString("type").equals("reply_message") && !locked(context)) {
+                    String answer = self.ask("Reply to " + action.optString("to") + ": " + action.optString("text") + ". Shall I send it?");
+                    if (!AgentRules.saidYes(answer)) {
+                        message.put("content", "All right, I haven't sent it, " + honorific + ".");
+                        continue;
+                    }
+                    action.put("confirmed", true);
+                }
                 String problem = PhoneControl.perform(context, action, honorific);
                 if (problem != null) message.put("content", problem);
                 else if (action.optString("type").equals("phone_task")) {

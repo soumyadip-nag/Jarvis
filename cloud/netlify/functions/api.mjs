@@ -43,7 +43,8 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
   await touch(device);
 
   if (route === "POST /chat") {
-    const { text, tz, voice: wantsVoice, notifications } = await body(req);
+    const { text, tz, voice: wantsVoice, notifications, locked: lockedFlag } = await body(req);
+    const locked = lockedFlag === true;
     if (!text || typeof text !== "string" || text.length > 4000) return json({ error: "Invalid text" }, 400);
     const defer = (promise) => (context?.waitUntil ? context.waitUntil(promise) : promise);
     if ((req.headers.get("accept") || "").includes("text/event-stream")) {
@@ -65,7 +66,7 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
             }
           };
           try {
-            event("done", await respond({ text: text.trim(), device, tz, defer, onSentence, notifications }));
+            event("done", await respond({ text: text.trim(), device, tz, defer, onSentence, notifications, locked }));
             await Promise.all(voiced);
           } catch (e) {
             console.error("chat failed:", e);
@@ -77,7 +78,7 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
       });
       return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
     }
-    return json(await respond({ text: text.trim(), device, tz, defer, notifications }));
+    return json(await respond({ text: text.trim(), device, tz, defer, notifications, locked }));
   }
 
   if (route === "GET /sync") {

@@ -769,6 +769,11 @@
     $("#inbox-app-info").hidden = !!allowed;
   }
 
+  /** Shows a reply before it's sent: OK sends it, Cancel doesn't. */
+  function confirmReply(a) {
+    return window.confirm(`Send this to ${a.to}${a.app ? ` on ${a.app}` : ""}?\n\n"${a.text}"`);
+  }
+
   /** Whether Jarvis can work inside other apps (Accessibility). */
   async function showAgentStatus() {
     const { allowed } = await Native("agentStatus").catch(() => ({}));
@@ -906,6 +911,11 @@
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
       for (const a of data.actions.filter((a) => (a.type === "phone_control" || a.type === "reply_message" || a.type === "phone_task") && !a.queued)) {
+        // A reply is shown first and only sent if you say so.
+        if (a.type === "reply_message") {
+          if (!confirmReply(a)) { data.reply.content = `All right, I haven't sent it, ${profile.honorific}.`; continue; }
+          a.confirmed = true;
+        }
         // The phone carries on by itself (hands-free or after the app closes), so it needs the sign-in.
         if (Native) await Native("setWakeSettings", wakeSettings()).catch(() => {});
         const done = Native
@@ -990,7 +1000,11 @@
         if (outcome.contact && settings.autoOpen) openUrl(telUrl(outcome.contact.tel));
       } else if (cmd.type === "phone_control" || cmd.type === "reply_message" || cmd.type === "phone_task") {
         if (Native) await Native("setWakeSettings", wakeSettings()).catch(() => {});
-        const done = Native ? await Native("phoneAction", { action: cmd }).catch((e) => ({ error: e.message })) : { error: "This needs the phone app." };
+        if (cmd.type === "reply_message" && !confirmReply(cmd)) {
+          renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: reply to ${cmd.to} not sent.` });
+          return;
+        }
+        const done = Native ? await Native("phoneAction", { action: cmd.type === "reply_message" ? { ...cmd, confirmed: true } : cmd }).catch((e) => ({ error: e.message })) : { error: "This needs the phone app." };
         const say = done.error || (cmd.type === "reply_message" ? `Sent to ${cmd.to}: "${cmd.text}"`
           : cmd.type === "phone_task" ? `Working on it: ${cmd.goal}` : `${cmd.confirm}.`);
         renderMessage({ role: "assistant", ts: cmd.ts, content: `From your laptop: ${say}` });

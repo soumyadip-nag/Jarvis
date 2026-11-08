@@ -101,6 +101,7 @@ final class PhoneAgent {
                 if (System.currentTimeMillis() - started > MAX_MS) { summary = "That was taking too long, so I stopped, " + honorific() + "."; break; }
                 JarvisAccessibility hands = JarvisAccessibility.instance;
                 if (hands == null) { summary = "I lost accessibility access, " + honorific() + "."; break; }
+                if (HandsFree.locked(context)) { summary = "Your phone locked, so I stopped, " + honorific() + "."; break; }
 
                 JarvisAccessibility.Screen screen = hands.read();
                 if (AgentRules.isBlocked(screen.pkg, screen.appName)) {

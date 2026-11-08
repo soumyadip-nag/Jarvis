@@ -36,14 +36,20 @@ public class MainActivity extends BridgeActivity {
         showForWake(intent);
     }
 
-    /** "Hey Jarvis" can come with the phone locked: show over the lock screen, only for that conversation. */
+    /**
+     * "Hey Jarvis" can come with the phone locked. The app (with the whole chat) is never shown over the lock screen:
+     * the screen turns on and Android asks for the unlock first.
+     */
     private void showForWake(Intent intent) {
         if (intent == null || !intent.getBooleanExtra("wake", false)) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true);
             setTurnScreenOn(true);
         } else {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            android.app.KeyguardManager keyguard = getSystemService(android.app.KeyguardManager.class);
+            if (keyguard != null && keyguard.isKeyguardLocked()) keyguard.requestDismissKeyguard(this, null);
         }
     }
 
