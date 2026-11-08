@@ -6,7 +6,7 @@ PKG=com.ushnish.jarvis
 exec > >(tee "$OUT/smoke.log") 2>&1
 
 # A real upgrade over the last published build: this is what the update button relies on.
-curl -fsSL -o "$RUNNER_TEMP/previous.apk" https://github.com/RaGnaRoK260404/Jarvis/releases/download/apk-latest/jarvis.apk
+curl -fsSL -o "$RUNNER_TEMP/previous.apk" https://github.com/RaGnaRoK260404/jarvis-updates/releases/download/apk-latest/jarvis.apk   || curl -fsSL -o "$RUNNER_TEMP/previous.apk" https://github.com/RaGnaRoK260404/Jarvis/releases/download/apk-latest/jarvis.apk
 adb install "$RUNNER_TEMP/previous.apk"
 if adb install -r "$OUT/jarvis.apk"; then
   echo "UPGRADE OVER PREVIOUS BUILD: OK"

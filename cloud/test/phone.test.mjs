@@ -145,3 +145,11 @@ test("only a real true counts as locked", async () => {
   await chat(phone, "who messaged me", { locked: "no" });
   assert.ok(lastTools.includes("reply_message"));
 });
+
+test("the approved app update is shown to signed-in devices only", async () => {
+  assert.deepEqual((await call("GET", "release", { token: phone })).data, {});
+  const { globalStore } = await import("../lib/store.mjs");
+  await globalStore().setJSON("release/approved", { versionCode: 17, sha256: "a".repeat(64), approvedAt: "2026-11-09" });
+  assert.deepEqual((await call("GET", "release", { token: phone })).data, { versionCode: 17, sha256: "a".repeat(64) });
+  assert.equal((await call("GET", "release")).status, 401);
+});

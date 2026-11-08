@@ -113,7 +113,7 @@ Those would need a native Android app.
 `mobile/` wraps this web app in a Capacitor shell that adds what a browser can't: reading all contacts
 (including WhatsApp ones where Android lists them), placing calls directly, and native listening and speech.
 The app loads the live site, so web changes reach it without reinstalling. GitHub Actions builds it and
-publishes `jarvis.apk` to the `apk-latest` release.
+publishes `jarvis.apk` to the `apk-latest` release of the public `jarvis-updates` repo.
 
 ## Phone actions
 

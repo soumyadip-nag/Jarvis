@@ -613,17 +613,20 @@
   function checkForUpdate() {
     if (!Native || Date.now() - lastUpdateCheck < 3600_000) return;
     lastUpdateCheck = Date.now();
-    Native("checkUpdate")
+    // Two keys: GitHub publishes an update, and the Jarvis server must have approved that exact file.
+    api("release")
+      .then((approved) => { releaseApproval = approved; return Native("checkUpdate", { approvedVersion: approved.versionCode ?? -1 }); })
       .then((r) => { $("#update-banner").hidden = !r.available; })
       .catch(() => {}); // older builds of the app, or no connection: try again next time
   }
+  let releaseApproval = {};
 
   async function installUpdate() {
     const banner = $("#update-banner");
     banner.disabled = true;
     banner.textContent = "Downloading the update…";
     try {
-      await Native("installUpdate");
+      await Native("installUpdate", { sha256: releaseApproval.sha256 || "" });
       banner.textContent = "⬆ Update available: tap to install";
     } catch (e) {
       banner.textContent = e.message;

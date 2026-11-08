@@ -102,3 +102,17 @@ jobs:
           target_commitish: ${{ github.sha }}
           body: "Built automatically from ${{ github.sha }}. Install jarvis.apk on your phone."
           files: mobile/ci-out/*
+
+      # Updates come from a separate public repo that holds only the built app, so this one can be private.
+      # UPDATES_TOKEN: a fine-grained token with "Contents: read and write" on that repo only.
+      - name: Publish the update
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: RaGnaRoK260404/jarvis-updates
+          token: ${{ secrets.UPDATES_TOKEN }}
+          tag_name: apk-latest
+          name: Jarvis Android (latest build)
+          prerelease: true
+          body: "The Jarvis Android app, built automatically. Install jarvis.apk on your phone."
+          files: mobile/ci-out/*

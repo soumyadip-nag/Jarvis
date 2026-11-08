@@ -389,7 +389,8 @@ public class JarvisNativePlugin extends Plugin {
 
     // ───────── updates ─────────
 
-    private static final String RELEASE = "https://github.com/RaGnaRoK260404/Jarvis/releases/download/apk-latest/";
+    // A public repo holding only the built app (the code's repo can be private): see .github/workflows/android.yml.
+    private static final String RELEASE = "https://github.com/RaGnaRoK260404/jarvis-updates/releases/download/apk-latest/";
 
     private static HttpURLConnection open(String url) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
@@ -400,7 +401,11 @@ public class JarvisNativePlugin extends Plugin {
         return connection;
     }
 
-    /** Compares this app's build number with the latest one GitHub published. */
+    /**
+     * Compares this app's build number with the latest one published. An update counts only once it has also been
+     * approved on the Jarvis server (`approvedVersion`, from GET /api/release): publishing alone isn't enough, so
+     * someone with only the GitHub account can't put an update on the phone. See cloud/release/approve.mjs.
+     */
     @PluginMethod
     public void checkUpdate(PluginCall call) {
         new Thread(() -> {
@@ -414,10 +419,12 @@ public class JarvisNativePlugin extends Plugin {
                     while ((line = reader.readLine()) != null) text.append(line);
                 }
                 long latest = new JSObject(text.toString()).getLong("versionCode");
+                long approved = call.getLong("approvedVersion", -1L);
                 JSObject result = new JSObject();
                 result.put("current", current);
                 result.put("latest", latest);
-                result.put("available", latest > current);
+                result.put("approved", approved);
+                result.put("available", latest > current && latest == approved);
                 call.resolve(result);
             } catch (Exception e) {
                 call.reject("Couldn't check for updates: " + e.getMessage());
@@ -425,9 +432,17 @@ public class JarvisNativePlugin extends Plugin {
         }).start();
     }
 
-    /** Downloads the latest APK and opens Android's install prompt. Android only accepts it if it has the same signature. */
+    /**
+     * Downloads the latest APK and opens Android's install prompt, but only if the file is exactly the one approved on
+     * the Jarvis server (its SHA-256). Android then also checks it has the same signature.
+     */
     @PluginMethod
     public void installUpdate(PluginCall call) {
+        String approved = call.getString("sha256", "");
+        if (approved == null || !approved.matches("[0-9a-f]{64}")) {
+            call.reject("This update hasn't been approved on your Jarvis server, so I won't install it.");
+            return;
+        }
         if (!getContext().getPackageManager().canRequestPackageInstalls()) {
             Intent settings = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getContext().getPackageName()));
             getActivity().startActivity(settings);
@@ -444,6 +459,12 @@ public class JarvisNativePlugin extends Plugin {
                     int read;
                     while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
                 }
+                String actual = sha256(apk);
+                if (!actual.equals(approved)) {
+                    apk.delete();
+                    call.reject("This download doesn't match the update approved on your Jarvis server, so I didn't install it. Tell Ushnish.");
+                    return;
+                }
                 Uri uri = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", apk);
                 Intent install = new Intent(Intent.ACTION_VIEW);
                 install.setDataAndType(uri, "application/vnd.android.package-archive");
@@ -454,6 +475,18 @@ public class JarvisNativePlugin extends Plugin {
                 call.reject("Couldn't download the update: " + e.getMessage());
             }
         }).start();
+    }
+
+    static String sha256(File file) throws Exception {
+        java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+        try (InputStream in = new java.io.FileInputStream(file)) {
+            byte[] buffer = new byte[65536];
+            int n;
+            while ((n = in.read(buffer)) != -1) digest.update(buffer, 0, n);
+        }
+        StringBuilder hex = new StringBuilder();
+        for (byte b : digest.digest()) hex.append(String.format("%02x", b));
+        return hex.toString();
     }
 
     // ───────── listening ─────────

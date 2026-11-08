@@ -5,6 +5,7 @@
 //                                   With "Accept: text/event-stream": "sentence" events as the reply is written, then "done".
 //                                   With {voice: true} too, "audio" events carry each sentence's MP3 (or null: fetch it)
 //   GET    /api/sync?since=<ts>    -> {messages, commands, devices, user}  (one cheap call for polling)
+//   GET    /api/release            -> {versionCode, sha256}: the phone app update approved by cloud/release/approve.mjs
 //   POST   /api/commands/<id>/done
 //   GET    /api/memories           -> {memories}
 //   POST   /api/memories           {text}
@@ -24,6 +25,7 @@ import { synthesize, voiceSession, MAX_SPEECH_CHARS } from "../../lib/voice.mjs"
 
 const VOICED_SENTENCES = 4;
 import { enqueue, touch, pending, done, status } from "../../lib/devices.mjs";
+import { globalStore } from "../../lib/store.mjs";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -83,6 +85,12 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
     const since = Number(url.searchParams.get("since") || 0);
     const [messages, commands, devices] = await Promise.all([messagesSince(since), pending(device), status()]);
     return json({ messages, commands, devices, user: { name: user.name, honorific: user.honorific } });
+  }
+
+  // The phone app update that's been approved, which the app checks before offering and installing it.
+  if (route === "GET /release") {
+    const approved = await globalStore().get("release/approved");
+    return json(approved ? { versionCode: approved.versionCode, sha256: approved.sha256 } : {});
   }
 
   if (req.method === "POST" && parts[0] === "commands" && parts[2] === "done") {

@@ -4,8 +4,12 @@ A Capacitor shell that loads the live site and adds what a WebView can't do: rea
 listening, speaking and installing updates. See `android/app/src/main/java/com/ushnish/jarvis/`.
 
 Changes to the web app in `cloud/` reach the app by themselves. Pushing changes in this folder makes GitHub
-build a new APK, try it on an emulator and publish it to the `apk-latest` release, where the app's update
-button finds it.
+build a new APK, try it on an emulator and publish it to the `apk-latest` release of the public `jarvis-updates` repo.
+
+Phones don't offer it until it's approved on the Jarvis server: from `cloud/`, run `node release/approve.mjs` to see
+the build's tests and fingerprint, then `node release/approve.mjs --yes`. The app only offers the approved version
+and only installs a file with the approved SHA-256, so publishing alone (someone with only the GitHub account)
+can't put an update on a phone.
 
 ## Signing
 

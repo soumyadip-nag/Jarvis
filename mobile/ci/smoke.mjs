@@ -52,5 +52,8 @@ console.log("phoneAction torch:", await native("phoneAction", { action: { type: 
 console.log("phoneAction pause:", await native("phoneAction", { action: { type: "phone_control", control: "pause" } }));
 console.log("phoneAction reply:", await native("phoneAction", { action: { type: "reply_message", to: "Rahul", text: "hi" } }));
 console.log("checkUpdate:", await native("checkUpdate"));
-console.log("installUpdate:", await native("installUpdate")); // should end at Android's install prompt
+// Updates need the server's approval: without it, or with the wrong fingerprint, nothing is installed.
+console.log("checkUpdate unapproved:", await native("checkUpdate", { approvedVersion: -1 }));
+console.log("installUpdate unapproved:", await native("installUpdate"));
+console.log("installUpdate wrong fingerprint:", await native("installUpdate", { sha256: "0".repeat(64) }));
 socket.close();
