@@ -1,4 +1,6 @@
-// Animated arc reactor (canvas port of the desktop HUD orb).
+// Animated HUD reactor, the same design as the desktop app's (Frontend/Gui.py, ArcReactor): change them together.
+// Layers, from the outside in: a radar sweep, framing arcs, a turning ring of text, ticks with markers, orbiting
+// data points, a segmented ring with a running pulse, the voice spectrum, coils, a hex core and the core.
 // States: booting, idle, listening, thinking, speaking, offline.
 (function () {
   const COLORS = {
@@ -9,7 +11,12 @@
     speaking: [80, 180, 255],
     offline: [255, 72, 72],
   };
-  const BARS = 72;
+  const LABELS = {
+    booting: "INITIALISING", idle: "STANDING BY", listening: "LISTENING",
+    thinking: "PROCESSING", speaking: "RESPONDING", offline: "OFFLINE",
+  };
+  const BARS = 96;
+  const DEG = Math.PI / 180;
 
   class Reactor {
     constructor(canvas) {
@@ -21,6 +28,7 @@
       this.level = 0;
       this.bars = new Array(BARS).fill(0);
       this.ripples = [];
+      this.layers = {}; // parts that only rotate, drawn once and then turned: drawing them every frame is slow
       this.last = performance.now();
       this._loop = this._loop.bind(this);
       requestAnimationFrame(this._loop);
@@ -31,8 +39,9 @@
       this.state = state;
     }
 
-    rgba(a, lighten = 0) {
-      const [r, g, b] = this.color.map((c) => Math.min(255, c + lighten));
+    /** The colour, made lighter by `lighter` percent (as Qt's QColor.lighter), at an opacity of 0 to 1. */
+    rgba(a, lighter = 100) {
+      const [r, g, b] = this.color.map((c) => Math.min(255, (c * lighter) / 100));
       return `rgba(${r | 0},${g | 0},${b | 0},${Math.max(0, Math.min(1, a))})`;
     }
 
@@ -42,26 +51,30 @@
       if (this.canvas.width !== Math.round(width * dpr) || this.canvas.height !== Math.round(height * dpr)) {
         this.canvas.width = Math.round(width * dpr);
         this.canvas.height = Math.round(height * dpr);
+        this.layers = {};
       }
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      return { w: width, h: height };
+      return { w: width, h: height, dpr };
     }
 
-    _update(dt) {
+    /** Moves the animation on by dt seconds. */
+    advance(dt) {
       this.t += dt;
       const target = COLORS[this.state] || COLORS.idle;
       this.color = this.color.map((c, i) => c + (target[i] - c) * Math.min(1, dt * 5));
-      let goal = 0;
+      let goal;
       if (this.state === "speaking") {
         goal = 0.35 + 0.65 * Math.abs(Math.sin(this.t * 7.3) * Math.sin(this.t * 2.1 + 1)) + (Math.random() - 0.5) * 0.2;
       } else if (this.state === "listening") {
         goal = 0.25 + 0.15 * Math.sin(this.t * 4);
+      } else {
+        goal = 0.06 + 0.03 * Math.sin(this.t * 1.7); // a faint shimmer, so it never looks frozen
       }
       this.level += (goal - this.level) * Math.min(1, dt * 11);
       for (let i = 0; i < BARS; i++) {
         const wave = 0.5 + 0.5 * Math.sin(i * 0.55 + this.t * 9) * Math.sin(i * 0.21 - this.t * 5);
         const g = this.level * (0.35 + 0.65 * wave) * (0.75 + Math.random() * 0.25);
-        this.bars[i] += (g - this.bars[i]) * 0.3;
+        this.bars[i] += (g - this.bars[i]) * 0.35;
       }
       const grow = this.state === "listening" ? 0.75 : 1.25;
       this.ripples = this.ripples.map((p) => p + dt * grow).filter((p) => p < 1);
@@ -74,115 +87,258 @@
       const dt = Math.min(0.05, (now - this.last) / 1000);
       this.last = now;
       if (!document.hidden && this.canvas.isConnected && this.canvas.offsetParent !== null) {
-        this._update(dt);
-        this._draw();
+        this.advance(dt);
+        this.draw();
       }
       requestAnimationFrame(this._loop);
     }
 
-    _draw() {
-      const { w, h } = this._resize();
+    /** A layer drawn once for this size, state and colour (to the nearest shade). */
+    _layer(name, R, dpr, draw) {
+      const key = `${Math.round(R)}|${dpr}|${this.state}|${this.color.map((v) => (v / 6) | 0).join(",")}`;
+      if (this.layers[name]?.key !== key) {
+        const size = Math.ceil(R * 2 + 4);
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = Math.ceil(size * dpr);
+        const c = canvas.getContext("2d");
+        c.scale(dpr, dpr);
+        c.translate(size / 2, size / 2);
+        draw.call(this, c, R);
+        this.layers[name] = { key, canvas, size };
+      }
+      return this.layers[name];
+    }
+
+    _drawLayer(layer, cx, cy, degrees, opacity = 1) {
+      const c = this.ctx;
+      c.save();
+      c.translate(cx, cy);
+      c.rotate(degrees * DEG);
+      c.globalAlpha = Math.min(1, opacity);
+      c.drawImage(layer.canvas, -layer.size / 2, -layer.size / 2, layer.size, layer.size);
+      c.restore();
+    }
+
+    _textRing(c, R) {
+      const label = LABELS[this.state] || this.state.toUpperCase();
+      const text = `J.A.R.V.I.S  •  ${label}  •  NEURAL CORE  •  SYNC PHONE/LAPTOP  •  `;
+      const radius = R * 0.885;
+      const size = Math.max(6, R * 0.042 * 1.33);
+      c.font = `bold ${size}px Consolas, "Roboto Mono", monospace`;
+      c.fillStyle = this.rgba(150 / 255, 130);
+      c.textAlign = "center";
+      // A whole number of repeats, so the text doesn't break where it meets itself.
+      const repeats = Math.max(1, Math.round(360 / (((R * 0.042 * 0.95) / radius) / DEG) / text.length));
+      const count = repeats * text.length;
+      for (let i = 0; i < count; i++) {
+        c.save();
+        c.rotate((i * 360 / count) * DEG);
+        c.fillText(text[i % text.length], 0, -radius);
+        c.restore();
+      }
+    }
+
+    _ticks(c, R) {
+      for (let i = 0; i < 120; i++) {
+        const major = i % 10 === 0;
+        const a = i * 3 * DEG;
+        const r1 = R * 0.775, r2 = R * (major ? 0.82 : 0.8);
+        c.beginPath();
+        c.lineWidth = major ? 2 : 1;
+        c.strokeStyle = this.rgba(major ? 190 / 255 : 70 / 255);
+        c.moveTo(r1 * Math.cos(a), r1 * Math.sin(a));
+        c.lineTo(r2 * Math.cos(a), r2 * Math.sin(a));
+        c.stroke();
+      }
+      c.fillStyle = this.rgba(210 / 255, 130);
+      for (let k = 0; k < 4; k++) {
+        const a = (k * 90 + 45) * DEG, tip = R * 0.755, base = R * 0.725, half = 2.2 * DEG;
+        c.beginPath();
+        c.moveTo(tip * Math.cos(a), tip * Math.sin(a));
+        c.lineTo(base * Math.cos(a - half), base * Math.sin(a - half));
+        c.lineTo(base * Math.cos(a + half), base * Math.sin(a + half));
+        c.fill();
+      }
+    }
+
+    _coils(c, R) {
+      const inner = R * 0.3, outer = R * 0.4, halfIn = 11 * DEG, halfOut = 13 * DEG;
+      c.fillStyle = this.rgba(70 / 255);
+      c.strokeStyle = this.rgba(170 / 255);
+      c.lineWidth = 1.2;
+      for (let k = 0; k < 10; k++) {
+        c.save();
+        c.rotate(k * 36 * DEG);
+        c.beginPath();
+        c.moveTo(inner * Math.cos(-halfIn), inner * Math.sin(-halfIn));
+        c.lineTo(outer * Math.cos(-halfOut), outer * Math.sin(-halfOut));
+        c.lineTo(outer * Math.cos(halfOut), outer * Math.sin(halfOut));
+        c.lineTo(inner * Math.cos(halfIn), inner * Math.sin(halfIn));
+        c.closePath();
+        c.fill();
+        c.stroke();
+        c.restore();
+      }
+    }
+
+    draw() {
+      const { w, h, dpr } = this._resize();
       const c = this.ctx;
       const cx = w / 2, cy = h / 2;
       const R = Math.min(w, h) / 2 - 4;
       const t = this.t;
-      const speed = { thinking: 3.2, speaking: 1.6, listening: 1.3 }[this.state] || 1;
-      const breathe = 0.5 + 0.5 * Math.sin(t * (this.state === "idle" ? 2.4 : 4));
+      const state = this.state;
+      const speed = { thinking: 3.0, speaking: 1.5, listening: 1.3 }[state] || 1;
+      const breathe = 0.5 + 0.5 * Math.sin(t * (state === "idle" ? 2.4 : 4));
+      const a255 = (v) => v / 255;
+      // Clockwise from 3 o'clock, in degrees, as on the laptop.
       const arc = (r, start, span, width, color, cap = "butt") => {
         c.beginPath();
         c.lineWidth = width;
         c.lineCap = cap;
         c.strokeStyle = color;
-        c.arc(cx, cy, r, start, start + span);
+        c.arc(cx, cy, r, start * DEG, (start + span) * DEG, span < 0);
         c.stroke();
       };
-      const deg = Math.PI / 180;
+      const polar = (r, d) => [cx + r * Math.cos(d * DEG), cy + r * Math.sin(d * DEG)];
       c.clearRect(0, 0, w, h);
 
-      // glow
+      // Bloom.
       let g = c.createRadialGradient(cx, cy, 0, cx, cy, R);
-      g.addColorStop(0, this.rgba(0.28 + 0.15 * this.level));
-      g.addColorStop(0.45, this.rgba(0.09));
+      g.addColorStop(0, this.rgba(a255(85 + 50 * this.level)));
+      g.addColorStop(0.35, this.rgba(a255(32)));
       g.addColorStop(1, this.rgba(0));
       c.fillStyle = g;
       c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.fill();
 
-      // ripples
-      for (const p of this.ripples) arc(R * (0.35 + 0.65 * p), 0, Math.PI * 2, 2, this.rgba(0.63 * (1 - p)));
-
-      // outer ring and rotating arcs
-      arc(R * 0.98, 0, Math.PI * 2, 1, this.rgba(0.22));
-      const rot = ((t * 22 * speed) % 360) * deg;
-      for (let k = 0; k < 3; k++) arc(R * 0.94, rot + k * 120 * deg, 70 * deg, 3, this.rgba(0.8));
-      for (let k = 0; k < 3; k++) arc(R * 0.94, rot + (k * 120 + 78) * deg, 30 * deg, 1.5, this.rgba(0.35));
-
-      // ticks
-      c.save();
-      c.translate(cx, cy);
-      c.rotate(-t * 8 * speed * deg);
-      for (let i = 0; i < 120; i++) {
-        const major = i % 10 === 0;
-        const a = i * 3 * deg;
-        const r1 = R * 0.8, r2 = R * (major ? 0.86 : 0.83);
+      // Radar sweep across the outer band.
+      const sweepAngle = (t * 50 * speed) % 360;
+      if (c.createConicGradient) {
+        const sweep = c.createConicGradient((sweepAngle - 36) * DEG, cx, cy);
+        sweep.addColorStop(0, this.rgba(0));
+        sweep.addColorStop(0.1, this.rgba(a255(95), 120));
+        sweep.addColorStop(0.1001, this.rgba(0));
+        sweep.addColorStop(1, this.rgba(0));
+        c.fillStyle = sweep;
         c.beginPath();
-        c.lineWidth = major ? 2 : 1;
-        c.strokeStyle = this.rgba(major ? 0.67 : 0.27);
-        c.moveTo(r1 * Math.cos(a), r1 * Math.sin(a));
-        c.lineTo(r2 * Math.cos(a), r2 * Math.sin(a));
-        c.stroke();
+        c.arc(cx, cy, R * 0.985, 0, Math.PI * 2);
+        c.arc(cx, cy, R * 0.7, 0, Math.PI * 2, true);
+        c.fill();
       }
-      c.restore();
+      c.beginPath();
+      c.lineWidth = 1.5;
+      c.strokeStyle = this.rgba(a255(200), 140);
+      c.moveTo(...polar(R * 0.7, sweepAngle));
+      c.lineTo(...polar(R * 0.985, sweepAngle));
+      c.stroke();
 
-      if (this.state === "thinking") {
-        const spin = ((t * 260) % 360) * deg;
-        arc(R * 0.72, spin, 90 * deg, 4, this.rgba(0.9, 30), "round");
-        arc(R * 0.72, spin + Math.PI, 90 * deg, 4, this.rgba(0.9, 30), "round");
-      }
-
-      const seg = ((-t * 35 * speed) % 360) * deg;
-      for (let k = 0; k < 12; k++) arc(R * 0.64, seg + k * 30 * deg, 18 * deg, Math.max(3, R * 0.04), this.rgba(0.47 + 0.31 * breathe));
-
-      // voice bars
-      if (this.level > 0.02) {
-        const base = R * 0.4;
-        c.lineCap = "round";
-        c.lineWidth = 2.5;
-        for (let i = 0; i < BARS; i++) {
-          const v = this.bars[i];
-          const a = (i * 360 / BARS - 90) * deg;
-          const len = R * 0.18 * v;
-          c.strokeStyle = this.rgba(0.43 + 0.55 * v, 30);
+      // Hairlines and the framing arcs, with bracket ends.
+      arc(R * 0.995, 0, 360, 1, this.rgba(a255(45)));
+      arc(R * 0.83, 0, 360, 1, this.rgba(a255(40)));
+      const frame = t * 6 * speed;
+      for (let k = 0; k < 4; k++) {
+        const start = frame + k * 90 + 8;
+        arc(R * 0.965, start, 58, Math.max(2, R * 0.018), this.rgba(a255(190)));
+        for (const edge of [start, start + 58]) {
           c.beginPath();
-          c.moveTo(base * Math.cos(a) + cx, base * Math.sin(a) + cy);
-          c.lineTo((base + len) * Math.cos(a) + cx, (base + len) * Math.sin(a) + cy);
+          c.lineWidth = 1.5;
+          c.strokeStyle = this.rgba(a255(220), 130);
+          c.moveTo(...polar(R * 0.935, edge));
+          c.lineTo(...polar(R * 0.995, edge));
           c.stroke();
+        }
+        arc(R * 0.965, start + 64, 14, 1.2, this.rgba(a255(110)));
+      }
+
+      // The ring of text, and the ticks turning the other way.
+      this._drawLayer(this._layer("text", R, dpr, this._textRing), cx, cy, -t * 5 * speed);
+      this._drawLayer(this._layer("ticks", R, dpr, this._ticks), cx, cy, -t * 10 * speed);
+
+      // Orbiting data points with fading trails.
+      for (const [radius, rate, phase] of [[0.71, 40, 0], [0.71, 40, 180], [0.685, -65, 90], [0.735, 25, 250]]) {
+        const angle = (t * rate * speed + phase) % 360;
+        const trail = rate > 0 ? -28 : 28;
+        for (let s = 0; s < 6; s++) arc(R * radius, angle + trail * s / 6, trail / 6, 2, this.rgba(a255(120 * (1 - s / 6))));
+        c.fillStyle = this.rgba(1, 160);
+        c.beginPath();
+        c.arc(...polar(R * radius, angle), R * 0.012 + 1, 0, Math.PI * 2);
+        c.fill();
+      }
+
+      // Segmented ring with a running pulse; while thinking, two comets chase round it.
+      const pulseAt = (t * 120 * speed) % 360;
+      for (let k = 0; k < 36; k++) {
+        const start = k * 10 - t * 18 * speed;
+        const distance = Math.abs((((start + 4 - pulseAt) % 360) + 540) % 360 - 180);
+        const lit = Math.max(0, 1 - distance / 60);
+        arc(R * 0.615, start, 6.5, R * (k % 3 === 0 ? 0.05 : 0.032), this.rgba(a255(70 + 70 * breathe + 115 * lit), 100 + 40 * lit));
+      }
+      if (state === "thinking") {
+        const spin = (t * 300) % 360;
+        for (const head of [spin, spin + 180]) {
+          for (let s = 0; s < 10; s++) arc(R * 0.665, head - s * 6, 6, 4 - s * 0.3, this.rgba(a255(240 * (1 - s / 10)), 130), "round");
         }
       }
 
-      // triangle
+      // Voice spectrum.
+      const base = R * 0.445;
+      c.lineCap = "round";
+      c.lineWidth = Math.max(1.5, R * 0.011);
+      for (let n = 0; n < 4; n++) {
+        c.beginPath();
+        c.strokeStyle = this.rgba(a255(90 + 160 * (n + 0.5) / 4), 130);
+        for (let i = 0; i < BARS; i++) {
+          const v = this.bars[i];
+          if (Math.min(3, (v * 4) | 0) !== n) continue;
+          const a = (i * 360 / BARS - 90) * DEG;
+          const length = R * 0.13 * v + 1;
+          c.moveTo(cx + base * Math.cos(a), cy + base * Math.sin(a));
+          c.lineTo(cx + (base + length) * Math.cos(a), cy + (base + length) * Math.sin(a));
+        }
+        c.stroke();
+      }
+
+      // Coils around the core, brighter as Jarvis speaks.
+      this._drawLayer(this._layer("coils", R, dpr, this._coils), cx, cy, t * 8 * speed, 0.55 + 0.25 * breathe + 0.3 * this.level);
+
+      // Hex core frame and a dashed inner ring.
       c.save();
       c.translate(cx, cy);
-      c.rotate(t * 12 * speed * deg);
-      c.strokeStyle = this.rgba(0.43);
-      c.lineWidth = 1.5;
+      c.rotate(-t * 15 * speed * DEG);
       c.beginPath();
-      [-90, 30, 150, -90].forEach((a, i) => {
-        const x = R * 0.36 * Math.cos(a * deg), y = R * 0.36 * Math.sin(a * deg);
-        i ? c.lineTo(x, y) : c.moveTo(x, y);
-      });
+      for (let k = 0; k <= 6; k++) {
+        const x = R * 0.27 * Math.cos(60 * k * DEG), y = R * 0.27 * Math.sin(60 * k * DEG);
+        k ? c.lineTo(x, y) : c.moveTo(x, y);
+      }
+      c.lineWidth = 1.6;
+      c.strokeStyle = this.rgba(a255(200), 120);
       c.stroke();
       c.restore();
+      for (let k = 0; k < 16; k++) arc(R * 0.235, k * 22.5 + t * 40 * speed, 12, 1.4, this.rgba(a255(170), 130));
 
-      // core
-      const coreR = R * (0.22 + 0.03 * breathe + 0.07 * this.level);
+      // The core, with lens-flare streaks.
+      const coreR = R * (0.19 + 0.025 * breathe + 0.06 * this.level);
       g = c.createRadialGradient(cx, cy, 0, cx, cy, coreR);
-      g.addColorStop(0, "rgba(255,255,255,0.98)");
-      g.addColorStop(0.35, this.rgba(0.94, 40));
-      g.addColorStop(0.75, this.rgba(0.47));
+      g.addColorStop(0, "rgba(255,255,255,1)");
+      g.addColorStop(0.3, this.rgba(a255(245), 150));
+      g.addColorStop(0.7, this.rgba(a255(130)));
       g.addColorStop(1, this.rgba(0));
       c.fillStyle = g;
       c.beginPath(); c.arc(cx, cy, coreR, 0, Math.PI * 2); c.fill();
-      arc(R * 0.26, 0, Math.PI * 2, 1.5, this.rgba(0.86));
+      const flare = 0.35 + 0.25 * breathe + 0.4 * this.level;
+      const thickness = Math.max(1, R * 0.008);
+      for (const [horizontal, length] of [[true, R * 0.62], [false, R * 0.3]]) {
+        g = horizontal ? c.createLinearGradient(cx - length, cy, cx + length, cy) : c.createLinearGradient(cx, cy - length, cx, cy + length);
+        g.addColorStop(0, this.rgba(0));
+        g.addColorStop(0.5, `rgba(255,255,255,${Math.min(1, 150 * flare / 255)})`);
+        g.addColorStop(1, this.rgba(0));
+        c.fillStyle = g;
+        if (horizontal) c.fillRect(cx - length, cy - thickness / 2, length * 2, thickness);
+        else c.fillRect(cx - thickness / 2, cy - length, thickness, length * 2);
+      }
+
+      // Listening ripples.
+      for (const p of this.ripples) arc(R * (0.3 + 0.7 * p), 0, 360, 2, this.rgba(a255(170 * (1 - p)), 120));
     }
   }
 

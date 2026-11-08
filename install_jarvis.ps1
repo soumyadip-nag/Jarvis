@@ -1,4 +1,4 @@
-# Adds Jarvis to the Desktop and the Start Menu, so it opens like any other app. Run once:
+# Adds Jarvis to the Desktop and the Start Menu, and starts it with Windows. Run once:
 #     powershell -ExecutionPolicy Bypass -File install_jarvis.ps1
 # The icons point at this folder, so keep it where it is, or run this again after moving it.
 $root = $PSScriptRoot
@@ -48,11 +48,14 @@ public static class ShortcutId {
 "@
 
 $shell = New-Object -ComObject WScript.Shell
-foreach ($folder in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"))) {
+# Startup makes Jarvis open when Windows starts, so "Hey Jarvis" always works while the laptop is on.
+foreach ($folder in @([Environment]::GetFolderPath("Desktop"), [Environment]::GetFolderPath("Programs"), [Environment]::GetFolderPath("Startup"))) {
     $path = Join-Path $folder "Jarvis.lnk"
     $shortcut = $shell.CreateShortcut($path)
     $shortcut.TargetPath = $pythonw
     $shortcut.Arguments = '"' + (Join-Path $root "Jarvis.pyw") + '"'
+    # At startup it opens on the wallpaper and by the clock, without its window.
+    if ($folder -eq [Environment]::GetFolderPath("Startup")) { $shortcut.Arguments += " --background" }
     $shortcut.WorkingDirectory = $root
     $shortcut.IconLocation = Join-Path $root "Frontend\jarvis.ico"
     $shortcut.Description = "J.A.R.V.I.S."

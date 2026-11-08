@@ -13,15 +13,17 @@ The backend runs on a worker QThread and talks to the UI only through Qt signals
 """
 import datetime
 import math
+import os
 import random
+import re
 import sys
 import threading
 import time
 
-from PyQt5.QtCore import Qt, QTimer, QThread, QObject, QPointF, QRectF, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import Qt, QTimer, QThread, QObject, QLineF, QPointF, QRectF, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import (
     QColor, QFont, QIcon, QPainter, QPen, QPixmap, QRadialGradient, QLinearGradient, QBrush,
-    QKeySequence, QFontMetrics,
+    QKeySequence, QFontMetrics, QConicalGradient, QPainterPath, QPolygonF,
 )
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton, QHBoxLayout, QVBoxLayout,
@@ -131,10 +133,16 @@ QUICK_ACTIONS = [
 
 # ───────────────────────────── arc reactor ─────────────────────────────
 class ArcReactor(QWidget):
-    """Animated HUD orb. Its colour and motion reflect what Jarvis is doing."""
+    """Animated HUD reactor. Its colour and motion reflect what Jarvis is doing.
+
+    The same design is drawn on the phone (cloud/public/reactor.js), so the two should change together.
+    Layers, from the outside in: a radar sweep, framing arcs, a turning ring of text, ticks with markers,
+    orbiting data points, a segmented ring with a running pulse, the voice spectrum, coils, a hex core and the core.
+    """
     clicked = pyqtSignal()
 
-    BARS = 72
+    BARS = 96
+    FPS = 30
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -148,160 +156,288 @@ class ArcReactor(QWidget):
         self.level = 0.0         # smoothed "voice" energy
         self.bars = [0.0] * self.BARS
         self.ripples = []
+        self._layers = {}        # parts that only rotate, drawn once and then turned: drawing them every frame is slow
+        self._last = time.monotonic()
         self._timer = QTimer(self, timeout=self._tick)
-        self._timer.start(16)
+        self._timer.start(int(1000 / self.FPS))
 
     def set_state(self, state):
-        self.state = state
-        if state == "listening":
+        if state == "listening" and self.state != "listening":
             self.ripples = [0.0]
+        self.state = state
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
 
-    def _tick(self):
-        self.t += 0.016
+    def advance(self, dt):
+        """Moves the animation on by dt seconds."""
+        self.t += dt
+        ease = min(1.0, dt * 5)
         target = STATE_COLORS.get(self.state, STATE_COLORS["idle"])
-        # ease colour toward the state's colour
-        r = self.color.red() + (target.red() - self.color.red()) * 0.08
-        g = self.color.green() + (target.green() - self.color.green()) * 0.08
-        b = self.color.blue() + (target.blue() - self.color.blue()) * 0.08
-        self.color = QColor(int(r), int(g), int(b))
-
-        # fake voice energy: syllable-like bursts while speaking
+        self.color = QColor(*(int(c + (g - c) * ease) for c, g in zip(self.color.getRgb()[:3], target.getRgb()[:3])))
         if self.state == "speaking":
             goal = 0.35 + 0.65 * abs(math.sin(self.t * 7.3) * math.sin(self.t * 2.1 + 1)) + random.uniform(-0.1, 0.1)
         elif self.state == "listening":
             goal = 0.25 + 0.15 * math.sin(self.t * 4)
         else:
-            goal = 0.0
-        self.level += (goal - self.level) * 0.18
-
+            goal = 0.06 + 0.03 * math.sin(self.t * 1.7)  # a faint shimmer, so it never looks frozen
+        self.level += (goal - self.level) * min(1.0, dt * 11)
         for i in range(self.BARS):
             wave = 0.5 + 0.5 * math.sin(i * 0.55 + self.t * 9) * math.sin(i * 0.21 - self.t * 5)
             goal_bar = self.level * (0.35 + 0.65 * wave) * random.uniform(0.75, 1.0)
-            self.bars[i] += (goal_bar - self.bars[i]) * 0.3
+            self.bars[i] += (goal_bar - self.bars[i]) * 0.35
+        grow = 0.75 if self.state == "listening" else 1.25
+        self.ripples = [p + dt * grow for p in self.ripples if p + dt * grow < 1.0]
+        if self.state == "listening" and (not self.ripples or self.ripples[-1] > 0.33):
+            self.ripples.append(0.0)
 
-        if self.state == "listening":
-            self.ripples = [p + 0.012 for p in self.ripples if p < 1.0]
-            if not self.ripples or self.ripples[-1] > 0.33:
-                self.ripples.append(0.0)
-        else:
-            self.ripples = [p + 0.02 for p in self.ripples if p < 1.0]
-
-        self.update()
+    def _tick(self):
+        now = time.monotonic()
+        self.advance(min(0.05, now - self._last))
+        self._last = now
+        if self.isVisible():
+            self.update()
 
     def _c(self, alpha, lighter=100):
         c = QColor(self.color).lighter(lighter)
         c.setAlpha(max(0, min(255, int(alpha))))
         return c
 
+    def _ring_of_text(self, R):
+        """The turning ring of text, drawn once for each size, state and colour."""
+        image, p, size = self._new_layer(R)
+        font = QFont(MONO, max(5, int(R * 0.042)))
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(self._c(150, 130))
+        label = STATE_LABELS.get(self.state, self.state.upper())
+        text = f"J.A.R.V.I.S  •  {label}  •  NEURAL CORE  •  SYNC PHONE/LAPTOP  •  "
+        radius = R * 0.885
+        # A whole number of repeats, so the text doesn't break where it meets itself.
+        repeats = max(1, round(360 / math.degrees((R * 0.042 * 0.95) / radius) / len(text)))
+        count = repeats * len(text)
+        step = 360 / count
+        p.translate(size / 2, size / 2)
+        for i in range(count):
+            p.save()
+            p.rotate(i * step)
+            p.drawText(QPointF(-R * 0.012, -radius), text[i % len(text)])
+            p.restore()
+        p.end()
+        return image
+
+    def _new_layer(self, R):
+        size = int(R * 2) + 4
+        image = QPixmap(size, size)
+        image.fill(Qt.transparent)
+        p = QPainter(image)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        return image, p, size
+
+    def _layer(self, name, R, draw):
+        """A layer drawn once for this size, state and colour (to the nearest shade)."""
+        key = (int(R), self.state, tuple(v // 6 for v in self.color.getRgb()[:3]))
+        if self._layers.get(name, (None,))[0] != key:
+            self._layers[name] = (key, draw(R))
+        return self._layers[name][1]
+
+    def _ticks(self, R):
+        image, p, size = self._new_layer(R)
+        p.translate(size / 2, size / 2)
+        for i in range(120):
+            major = i % 10 == 0
+            a = math.radians(i * 3)
+            r1, r2 = R * 0.775, R * (0.82 if major else 0.80)
+            p.setPen(QPen(self._c(190 if major else 70), 2 if major else 1))
+            p.drawLine(QPointF(r1 * math.cos(a), r1 * math.sin(a)), QPointF(r2 * math.cos(a), r2 * math.sin(a)))
+        p.setPen(Qt.NoPen)
+        p.setBrush(self._c(210, 130))
+        for k in range(4):
+            a = math.radians(k * 90 + 45)
+            tip, base, half = R * 0.755, R * 0.725, math.radians(2.2)
+            p.drawPolygon(QPolygonF([
+                QPointF(tip * math.cos(a), tip * math.sin(a)),
+                QPointF(base * math.cos(a - half), base * math.sin(a - half)),
+                QPointF(base * math.cos(a + half), base * math.sin(a + half)),
+            ]))
+        p.end()
+        return image
+
+    def _coils(self, R):
+        image, p, size = self._new_layer(R)
+        p.translate(size / 2, size / 2)
+        coil = QPainterPath()
+        inner, outer, half_in, half_out = R * 0.30, R * 0.40, math.radians(11), math.radians(13)
+        coil.moveTo(inner * math.cos(-half_in), inner * math.sin(-half_in))
+        coil.lineTo(outer * math.cos(-half_out), outer * math.sin(-half_out))
+        coil.lineTo(outer * math.cos(half_out), outer * math.sin(half_out))
+        coil.lineTo(inner * math.cos(half_in), inner * math.sin(half_in))
+        coil.closeSubpath()
+        for k in range(10):
+            p.save()
+            p.rotate(k * 36)
+            p.setBrush(self._c(70))
+            p.setPen(QPen(self._c(170), 1.2))
+            p.drawPath(coil)
+            p.restore()
+        p.end()
+        return image
+
+    def _draw_layer(self, p, center, image, degrees, opacity=1.0):
+        p.save()
+        p.translate(center)
+        p.rotate(degrees)
+        p.setOpacity(min(1.0, opacity))
+        p.drawPixmap(QPointF(-image.width() / 2, -image.height() / 2), image)
+        p.restore()
+
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
         cx, cy = w / 2, h / 2
-        R = min(w, h) / 2 - 8
+        R = min(w, h) / 2 - 6
         center = QPointF(cx, cy)
         t = self.t
-        speed = {"thinking": 3.2, "speaking": 1.6, "listening": 1.3}.get(self.state, 1.0)
-        breathe = 0.5 + 0.5 * math.sin(t * (2.4 if self.state == "idle" else 4.0))
+        state = self.state
+        speed = {"thinking": 3.0, "speaking": 1.5, "listening": 1.3}.get(state, 1.0)
+        breathe = 0.5 + 0.5 * math.sin(t * (2.4 if state == "idle" else 4.0))
 
         def ring(radius):
             return QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
 
-        # ambient glow
+        def arc(radius, start, span, width, colour, cap=Qt.FlatCap):
+            p.setPen(QPen(colour, width, Qt.SolidLine, cap))
+            p.setBrush(Qt.NoBrush)
+            p.drawArc(ring(radius), int(-start * 16), int(-span * 16))  # clockwise from 3 o'clock, in degrees
+
+        def polar(radius, degrees):
+            a = math.radians(degrees)
+            return QPointF(cx + radius * math.cos(a), cy + radius * math.sin(a))
+
+        # Bloom.
         glow = QRadialGradient(center, R)
-        glow.setColorAt(0.0, self._c(70 + 40 * self.level))
-        glow.setColorAt(0.45, self._c(22))
+        glow.setColorAt(0.0, self._c(85 + 50 * self.level))
+        glow.setColorAt(0.35, self._c(32))
         glow.setColorAt(1.0, self._c(0))
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(glow))
         p.drawEllipse(center, R, R)
 
-        # listening ripples
-        for prog in self.ripples:
-            p.setPen(QPen(self._c(160 * (1 - prog)), 2))
-            p.setBrush(Qt.NoBrush)
-            rr = R * (0.35 + 0.65 * prog)
-            p.drawEllipse(center, rr, rr)
+        # Radar sweep across the outer band.
+        sweep_angle = (t * 50 * speed) % 360
+        sweep = QConicalGradient(center, -sweep_angle)
+        sweep.setColorAt(0.0, self._c(95, 120))
+        sweep.setColorAt(0.10, self._c(0))
+        sweep.setColorAt(1.0, self._c(0))
+        band = QPainterPath()
+        band.addEllipse(center, R * 0.985, R * 0.985)
+        band.addEllipse(center, R * 0.70, R * 0.70)
+        band.setFillRule(Qt.OddEvenFill)
+        p.setBrush(QBrush(sweep))
+        p.drawPath(band)
+        p.setPen(QPen(self._c(200, 140), 1.5))
+        p.drawLine(polar(R * 0.70, sweep_angle), polar(R * 0.985, sweep_angle))
 
+        # Hairlines and the framing arcs, with bracket ends.
+        arc(R * 0.995, 0, 360, 1, self._c(45))
+        arc(R * 0.83, 0, 360, 1, self._c(40))
+        frame = t * 6 * speed
+        for k in range(4):
+            start = frame + k * 90 + 8
+            arc(R * 0.965, start, 58, max(2.0, R * 0.018), self._c(190))
+            for edge in (start, start + 58):
+                p.setPen(QPen(self._c(220, 130), 1.5))
+                p.drawLine(polar(R * 0.935, edge), polar(R * 0.995, edge))
+            arc(R * 0.965, start + 64, 14, 1.2, self._c(110))
+
+        # The ring of text.
+        self._draw_layer(p, center, self._layer("text", R, self._ring_of_text), -t * 5 * speed)
+
+        # Ticks, turning the other way, with triangle markers.
+        self._draw_layer(p, center, self._layer("ticks", R, self._ticks), -t * 10 * speed)
+
+        # Orbiting data points with fading trails.
+        for radius, rate, phase in ((0.71, 40, 0), (0.71, 40, 180), (0.685, -65, 90), (0.735, 25, 250)):
+            angle = (t * rate * speed + phase) % 360
+            trail = -28 if rate > 0 else 28
+            for s in range(6):
+                arc(R * radius, angle + trail * s / 6, trail / 6, 2, self._c(120 * (1 - s / 6)), Qt.FlatCap)
+            p.setPen(Qt.NoPen)
+            p.setBrush(self._c(255, 160))
+            p.drawEllipse(polar(R * radius, angle), R * 0.012 + 1, R * 0.012 + 1)
+
+        # Segmented ring with a running pulse; while thinking, two comets chase round it.
+        pulse_at = (t * 120 * speed) % 360
+        for k in range(36):
+            start = k * 10 - t * 18 * speed
+            distance = abs(((start + 4 - pulse_at) + 180) % 360 - 180)
+            lit = max(0.0, 1 - distance / 60)
+            width = R * (0.05 if k % 3 == 0 else 0.032)
+            arc(R * 0.615, start, 6.5, width, self._c(70 + 70 * breathe + 115 * lit, 100 + int(40 * lit)))
+        if state == "thinking":
+            spin = (t * 300) % 360
+            for head in (spin, spin + 180):
+                for s in range(10):
+                    arc(R * 0.665, head - s * 6, 6, 4 - s * 0.3, self._c(240 * (1 - s / 10), 130), Qt.RoundCap)
+
+        # Voice spectrum, drawn in a few batches of similar brightness.
+        base = R * 0.445
+        batches = [[], [], [], []]
+        for i, v in enumerate(self.bars):
+            a = math.radians(i * 360 / self.BARS - 90)
+            length = R * 0.13 * v + 1
+            batches[min(3, int(v * 4))].append(QLineF(cx + base * math.cos(a), cy + base * math.sin(a),
+                                                      cx + (base + length) * math.cos(a), cy + (base + length) * math.sin(a)))
+        for n, lines in enumerate(batches):
+            if lines:
+                p.setPen(QPen(self._c(90 + 160 * (n + 0.5) / 4, 130), max(1.5, R * 0.011), cap=Qt.RoundCap))
+                p.drawLines(lines)
+
+        # Coils around the core, brighter as Jarvis speaks.
+        self._draw_layer(p, center, self._layer("coils", R, self._coils), t * 8 * speed, 0.55 + 0.25 * breathe + 0.3 * self.level)
+
+        # Hex core frame and a dashed inner ring.
+        p.save()
+        p.translate(center)
+        p.rotate(-t * 15 * speed)
+        hexagon = QPolygonF([QPointF(R * 0.27 * math.cos(math.radians(60 * k)), R * 0.27 * math.sin(math.radians(60 * k))) for k in range(6)])
         p.setBrush(Qt.NoBrush)
-
-        # outer hairline + rotating arc segments
-        p.setPen(QPen(self._c(55), 1))
-        p.drawEllipse(center, R * 0.98, R * 0.98)
-        rot = int((t * 22 * speed) % 360 * 16)
-        p.setPen(QPen(self._c(200), 3, cap=Qt.FlatCap))
-        for k in range(3):
-            p.drawArc(ring(R * 0.94), rot + k * 120 * 16, 70 * 16)
-        p.setPen(QPen(self._c(90), 1.5, cap=Qt.FlatCap))
-        for k in range(3):
-            p.drawArc(ring(R * 0.94), rot + (k * 120 + 78) * 16, 30 * 16)
-
-        # tick ring (counter-rotating)
-        p.save()
-        p.translate(center)
-        p.rotate(-t * 8 * speed)
-        for i in range(120):
-            major = i % 10 == 0
-            p.setPen(QPen(self._c(170 if major else 70), 2 if major else 1))
-            r1, r2 = R * 0.80, R * (0.86 if major else 0.83)
-            a = math.radians(i * 3)
-            p.drawLine(QPointF(r1 * math.cos(a), r1 * math.sin(a)), QPointF(r2 * math.cos(a), r2 * math.sin(a)))
+        p.setPen(QPen(self._c(200, 120), 1.6))
+        p.drawPolygon(hexagon)
         p.restore()
+        for k in range(16):
+            arc(R * 0.235, k * 22.5 + t * 40 * speed, 12, 1.4, self._c(170, 130))
 
-        # thinking: fast double arc
-        if self.state == "thinking":
-            spin = int((t * 260) % 360 * 16)
-            p.setPen(QPen(self._c(230, 120), 4, cap=Qt.RoundCap))
-            p.drawArc(ring(R * 0.72), spin, 90 * 16)
-            p.drawArc(ring(R * 0.72), spin + 180 * 16, 90 * 16)
-
-        # segmented middle ring
-        seg_rot = int((-t * 35 * speed) % 360 * 16)
-        p.setPen(QPen(self._c(120 + 80 * breathe), 6, cap=Qt.FlatCap))
-        for k in range(12):
-            p.drawArc(ring(R * 0.64), seg_rot + k * 30 * 16, 18 * 16)
-
-        # voice bars
-        if self.level > 0.02:
-            p.save()
-            p.translate(center)
-            base = R * 0.40
-            for i, v in enumerate(self.bars):
-                a = math.radians(i * 360 / self.BARS - 90)
-                length = R * 0.18 * v
-                p.setPen(QPen(self._c(110 + 140 * v, 130), 2.5, cap=Qt.RoundCap))
-                p.drawLine(QPointF(base * math.cos(a), base * math.sin(a)),
-                           QPointF((base + length) * math.cos(a), (base + length) * math.sin(a)))
-            p.restore()
-
-        # inner triangle frame (a nod to the classic reactor)
-        p.save()
-        p.translate(center)
-        p.rotate(t * 12 * speed)
-        p.setPen(QPen(self._c(110), 1.5))
-        tri = R * 0.36
-        pts = [QPointF(tri * math.cos(math.radians(a)), tri * math.sin(math.radians(a))) for a in (-90, 30, 150)]
-        for i in range(3):
-            p.drawLine(pts[i], pts[(i + 1) % 3])
-        p.restore()
-
-        # core
-        core_r = R * (0.22 + 0.03 * breathe + 0.07 * self.level)
+        # The core, with lens-flare streaks.
+        core_r = R * (0.19 + 0.025 * breathe + 0.06 * self.level)
         core = QRadialGradient(center, core_r)
-        core.setColorAt(0.0, QColor(255, 255, 255, 250))
-        core.setColorAt(0.35, self._c(240, 140))
-        core.setColorAt(0.75, self._c(120))
+        core.setColorAt(0.0, QColor(255, 255, 255, 255))
+        core.setColorAt(0.30, self._c(245, 150))
+        core.setColorAt(0.70, self._c(130))
         core.setColorAt(1.0, self._c(0))
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(core))
         p.drawEllipse(center, core_r, core_r)
-        p.setBrush(Qt.NoBrush)
-        p.setPen(QPen(self._c(220), 1.5))
-        p.drawEllipse(center, R * 0.26, R * 0.26)
+        flare = 0.35 + 0.25 * breathe + 0.4 * self.level
+        for horizontal, length in ((True, R * 0.62), (False, R * 0.30)):
+            streak = QLinearGradient(QPointF(cx - length, cy) if horizontal else QPointF(cx, cy - length),
+                                     QPointF(cx + length, cy) if horizontal else QPointF(cx, cy + length))
+            streak.setColorAt(0.0, self._c(0))
+            streak.setColorAt(0.5, QColor(255, 255, 255, int(150 * flare)))
+            streak.setColorAt(1.0, self._c(0))
+            p.setBrush(QBrush(streak))
+            thickness = max(1.0, R * 0.008)
+            if horizontal:
+                p.drawRect(QRectF(cx - length, cy - thickness / 2, length * 2, thickness))
+            else:
+                p.drawRect(QRectF(cx - thickness / 2, cy - length, thickness, length * 2))
+
+        # Listening ripples.
+        for prog in self.ripples:
+            arc(R * (0.30 + 0.70 * prog), 0, 360, 2, self._c(170 * (1 - prog), 120))
         p.end()
 
 
@@ -471,6 +607,9 @@ class AssistantWorker(QObject):
     reply = pyqtSignal(str, str)       # role, text
     ready = pyqtSignal(bool)
     exit_requested = pyqtSignal()
+    heard_nothing = pyqtSignal()       # a conversation ends when nobody speaks
+    conversation_ended = pyqtSignal()  # "that's all"
+    sleep_requested = pyqtSignal()     # "go to sleep"
 
     def __init__(self):
         super().__init__()
@@ -505,9 +644,24 @@ class AssistantWorker(QObject):
         self.ready.emit(True)
         self._respond(greeting())
 
+    def _control_phrase(self, text):
+        """Handles "that's all" and "go to sleep" here, rather than asking the AI. True if it was one."""
+        said = " ".join(re.sub(r"[^a-z ]", "", text.lower()).split())  # "That's all." -> "thats all"
+        if SLEEP_PHRASE.search(said):
+            self.sleep_requested.emit()
+            self._respond("Going to sleep, sir. Tap me when you need me.")
+            return True
+        if END_PHRASE.fullmatch(said):
+            self.conversation_ended.emit()
+            self._respond("Very good, sir.")
+            return True
+        return False
+
     @pyqtSlot(str)
     def process(self, text):
         if not self.handle_query:
+            return
+        if self._control_phrase(text):
             return
         self.state.emit("thinking")
         try:
@@ -536,6 +690,7 @@ class AssistantWorker(QObject):
             print(f"Speech recognition error: {e}")
             text = None
         if not text:
+            self.heard_nothing.emit()
             self.state.emit("idle")
             self.status.emit("Didn't catch that")
             return
@@ -556,6 +711,64 @@ class AssistantWorker(QObject):
                 print(f"TTS error: {e}")
         self.state.emit("idle")
         self.status.emit("Awaiting your command")
+
+
+END_PHRASE = re.compile(r"((thank you|thanks|ok|okay) )?(thats all|that is all|nothing else|never ?mind|thats it)( (jarvis|for now|thanks|thank you))?")
+SLEEP_PHRASE = re.compile(r"\b(go to sleep|sleep mode|stop listening)\b")
+
+
+def beep():
+    """A short tone to say Jarvis is listening, played in the background so the window doesn't wait."""
+    if sys.platform == "win32":
+        import winsound
+        threading.Thread(target=winsound.Beep, args=(1100, 90), daemon=True).start()
+
+
+class WakeListener(QObject):
+    """Runs the "Hey Jarvis" detector (Backend/WakeWord.py) in its own process, and signals each time it's heard.
+
+    Its own process, because its audio and AI libraries could clash with the window's. If it stops, it's restarted.
+    """
+    heard = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.running = True
+        self.process = None
+
+    def start(self):
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def stop(self):
+        self.running = False
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+
+    def _loop(self):
+        import subprocess
+        from Backend.config import ROOT_DIR
+        failures = 0
+        while self.running and failures < 5:
+            started = time.time()
+            try:
+                self.process = subprocess.Popen(
+                    [sys.executable, "-m", "Backend.WakeWord"], cwd=ROOT_DIR, text=True, bufsize=1,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"},
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                for line in self.process.stdout:
+                    if line.startswith("WAKE"):
+                        self.heard.emit()
+                    elif not line.startswith("READY"):
+                        print(f"Wake word: {line.rstrip()}")
+            except OSError as e:
+                print(f"Wake word couldn't start: {e}")
+            if not self.running:
+                return
+            failures = failures + 1 if time.time() - started < 60 else 0  # only give up if it keeps failing quickly
+            time.sleep(5)
+        print("Wake word stopped after repeated failures")
 
 
 class SyncWorker(QObject):
@@ -818,7 +1031,7 @@ class MainWindow(QMainWindow):
         self.input = QLineEdit()
         self.input.setObjectName("Input")
         self.input.setFixedHeight(44)
-        self.input.setPlaceholderText("Type a command, or press Ctrl+Space to speak…")
+        self.input.setPlaceholderText("Type a command, say \"Hey Jarvis\", or press Ctrl+Space…")
         self.input.returnPressed.connect(lambda: self.send(self.input.text()))
         input_row.addWidget(self.input, 1)
         self.mic_btn = QPushButton("🎙")
@@ -861,12 +1074,24 @@ class MainWindow(QMainWindow):
         self.worker.reply.connect(self.chat.add)
         self.worker.user_said.connect(lambda t: self.chat.add("user", t))
         self.worker.exit_requested.connect(lambda: QTimer.singleShot(400, self.close))
+        self.worker.heard_nothing.connect(self.end_conversation)
+        self.worker.conversation_ended.connect(self.end_conversation)
+        self.worker.sleep_requested.connect(self.go_to_sleep)
         self.request_text.connect(self.worker.process)
         self.request_listen.connect(self.worker.listen)
         self.thread_.started.connect(self.worker.boot)
         self.sync = None
+        self.wake = None
+        self.wallpaper = None      # Jarvis on the desktop wallpaper, when it's on (see Frontend/Wallpaper.py)
+        self.tray = None
+        self.quitting = False
+        self.conversation = False  # after "Hey Jarvis", it keeps listening for follow-ups
+        self.sleeping = False      # after "go to sleep", only a tap wakes it
         if start_backend:
             self.thread_.start()
+            self.wake = WakeListener()
+            self.wake.heard.connect(self.on_wake_word)
+            self.wake.start()
             from Backend.CloudSync import enabled as cloud_enabled
             if cloud_enabled():
                 self.sync = SyncWorker()
@@ -898,8 +1123,73 @@ class MainWindow(QMainWindow):
         self.request_text.emit(text)
 
     def listen(self):
+        if self.sleeping:
+            self.sleeping = False
+            if self.wallpaper:
+                self.wallpaper.asleep = False
+            self.show_status("Awake")
         if not self.busy:
             self.request_listen.emit()
+
+    def on_wake_word(self):
+        from Backend.CloudAssistant import call_active
+        if self.sleeping or call_active.is_set() or self.state not in ("idle", "speaking"):
+            return
+        self.conversation = True
+        beep()
+        if self.state == "speaking":
+            self.stop_speaking()  # it listens once it has stopped (see on_state)
+        else:
+            self.listen()
+
+    def show_status(self, text):
+        self.status_label.setText(text)
+        if self.wallpaper:
+            self.wallpaper.set_status(text)
+
+    def bring_to_front(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def quit_jarvis(self):
+        self.quitting = True
+        self.close()
+
+    def add_tray_icon(self):
+        """An icon by the clock, so Jarvis keeps running with its window closed."""
+        from PyQt5.QtWidgets import QMenu, QSystemTrayIcon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray = QSystemTrayIcon(make_icon(), self)
+        self.tray.setToolTip("J.A.R.V.I.S. Say \"Hey Jarvis\"")
+        menu = QMenu()
+        menu.addAction("Open Jarvis", self.bring_to_front)
+        menu.addAction("Talk", self.listen)
+        menu.addSeparator()
+        menu.addAction("Quit Jarvis", self.quit_jarvis)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(lambda reason: self.bring_to_front() if reason == QSystemTrayIcon.Trigger else None)
+        self.tray.show()
+
+    def end_conversation(self):
+        self.conversation = False
+
+    def go_to_sleep(self):
+        self.conversation = False
+        self.sleeping = True
+        if self.wallpaper:
+            self.wallpaper.asleep = True
+            self.show_status("Asleep. Click me to wake me")
+
+    def toggle_sleep(self):
+        if self.sleeping:
+            self.sleeping = False
+            if self.wallpaper:
+                self.wallpaper.asleep = False
+            self.show_status("Awake. Say \"Hey Jarvis\"")
+        else:
+            self.go_to_sleep()
 
     def stop_speaking(self):
         if self.state == "speaking":
@@ -923,6 +1213,10 @@ class MainWindow(QMainWindow):
         self.state_label.setText(STATE_LABELS.get(state, state.upper()))
         self.state_label.setStyleSheet(f"color: {color};")
         self._set_controls(state == "idle")
+        if state == "idle" and self.conversation and not self.sleeping:
+            QTimer.singleShot(250, self.listen)  # a follow-up, without saying "Hey Jarvis" again
+        elif state == "idle" and self.sleeping:
+            self.show_status("Asleep. Click me, or press Ctrl+Space, to wake me")
         self.mic_btn.setProperty("active", state == "listening")
         self.mic_btn.style().unpolish(self.mic_btn)
         self.mic_btn.style().polish(self.mic_btn)
@@ -935,6 +1229,20 @@ class MainWindow(QMainWindow):
         self.footer.setText(f"{dot}    •    {self.footer_base}")
 
     def closeEvent(self, event):
+        if (self.tray or self.wallpaper) and not self.quitting:
+            # Closing the window keeps Jarvis running on the wallpaper (and by the clock, without a wallpaper).
+            event.ignore()
+            self.hide()
+            if self.tray and not getattr(self, "_told_about_tray", False):
+                self.tray.showMessage("Jarvis is still running", "Say \"Hey Jarvis\", or click the icon by the clock. Quit from its menu.")
+                self._told_about_tray = True
+            return
+        if self.tray:
+            self.tray.hide()
+        if self.wallpaper:
+            self.wallpaper.close()
+        if self.wake:
+            self.wake.stop()
         if self.sync:
             self.sync.running = False
         self.worker.stop_speaking()
@@ -951,9 +1259,43 @@ def GraphicalUserInterface():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)
     app.setStyleSheet(STYLE)
+    app.setQuitOnLastWindowClosed(False)  # closing the window hides it; "Quit Jarvis" ends the app
     window = MainWindow()
-    window.show()
+    add_wallpaper(window)
+    # With the wallpaper, that's the whole app: no window or taskbar icon. Its menu opens the window to type.
+    # Without it (turned off, or not supported), the app has its window and an icon by the clock.
+    if not window.wallpaper:
+        window.add_tray_icon()
+        if "--background" not in sys.argv or not window.tray:
+            window.show()
+    window.destroyed.connect(app.quit)
+    app.aboutToQuit.connect(lambda: window.wallpaper and window.wallpaper.close())
     sys.exit(app.exec_())
+
+
+def add_wallpaper(window):
+    """Puts Jarvis on the desktop wallpaper. Turn it off with JARVIS_WALLPAPER=off in .env."""
+    if sys.platform != "win32" or os.getenv("JARVIS_WALLPAPER", "on").lower() in ("0", "off", "false", "no"):
+        return
+    try:
+        from Frontend.Wallpaper import WallpaperWindow
+        wallpaper = WallpaperWindow()
+        if not wallpaper.attach():
+            wallpaper.deleteLater()
+            return
+    except Exception as e:
+        print(f"Wallpaper couldn't start: {e}")
+        return
+    window.wallpaper = wallpaper
+    window.worker.state.connect(wallpaper.set_state)
+    window.worker.status.connect(wallpaper.set_status)
+    window.worker.reply.connect(wallpaper.set_reply)
+    if window.sync:
+        window.sync.message.connect(wallpaper.set_reply)
+    wallpaper.listen_requested.connect(window.listen)
+    wallpaper.open_requested.connect(window.bring_to_front)
+    wallpaper.sleep_toggled.connect(window.toggle_sleep)
+    wallpaper.quit_requested.connect(window.quit_jarvis)
 
 
 if __name__ == "__main__":

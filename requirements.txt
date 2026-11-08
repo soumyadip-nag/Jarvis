@@ -17,3 +17,4 @@ AppOpener
 pywhatkit
 keyboard
 sounddevice
+onnxruntime
