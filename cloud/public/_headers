@@ -1,9 +1,6 @@
 /sw.js
   Cache-Control: no-cache
   Service-Worker-Allowed: /
-  X-Frame-Options: DENY
-  X-Content-Type-Options: nosniff
-  Referrer-Policy: no-referrer
 
 /*
   X-Frame-Options: DENY

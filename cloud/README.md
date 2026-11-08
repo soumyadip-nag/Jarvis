@@ -40,7 +40,7 @@ conversation, one memory and can send commands to each other.
 Add to the laptop's `.env` (in the project root) and restart `python Main.py`:
 
 ```
-JARVIS_SERVER_URL=https://<your-site>.netlify.app
+JARVIS_SERVER_URL=https://jarvis.<your-subdomain>.workers.dev   (or https://<your-site>.netlify.app on Netlify)
 JARVIS_PASSCODE=<same passcode>
 ```
 

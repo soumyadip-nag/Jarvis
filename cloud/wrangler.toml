@@ -15,7 +15,7 @@ run_worker_first = ["/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "jarvis"
-database_id = "local-only-until-created"
+database_id = "1b57c7ec-e145-4ccc-9f61-f33ad933db95"
 
 # The weather check, every hour.
 [triggers]

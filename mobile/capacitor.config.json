@@ -3,7 +3,7 @@
   "appName": "Jarvis",
   "webDir": "www",
   "server": {
-    "url": "https://my-jarvis-app1.netlify.app",
+    "url": "https://jarvis.my-jarvis-app1.workers.dev",
     "cleartext": false
   },
   "android": {
