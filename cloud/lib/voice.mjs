@@ -39,3 +39,49 @@ export async function synthesize(text) {
     try { tts.close(); } catch {}
   }
 }
+
+/**
+ * Voices several sentences over one connection. Connecting is most of the time a sentence takes (about a second,
+ * against a third of a second once connected), so this starts connecting straight away, while the reply is still
+ * being written. Each say() resolves to MP3 bytes, or null if the voice failed, so the phone can fetch it instead.
+ */
+export function voiceSession() {
+  let queue = (async () => {
+    const { MsEdgeTTS, OUTPUT_FORMAT } = await import("msedge-tts");
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata(VOICE(), OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    return tts;
+  })();
+  const connected = queue;
+  connected.catch(() => {});
+  let broken = false;
+  return {
+    say(text) {
+      const result = queue.then(async () => {
+        if (broken) return null;
+        const tts = await connected;
+        const { audioStream } = tts.toStream(escapeForSpeech(text), { rate: RATE, pitch: PITCH });
+        const chunks = [];
+        const done = new Promise((resolve, reject) => {
+          audioStream.on("data", (chunk) => chunks.push(chunk));
+          audioStream.on("end", resolve);
+          audioStream.on("close", resolve);
+          audioStream.on("error", reject);
+        });
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Voice service timed out")), TIMEOUT_MS));
+        await Promise.race([done, timeout]);
+        return chunks.length ? Buffer.concat(chunks) : null;
+      }).catch((e) => {
+        broken = true; // one failure means the connection can't be trusted for the rest
+        console.warn("voice failed:", e.message);
+        return null;
+      });
+      queue = result;
+      return result;
+    },
+    async close() {
+      await queue.catch(() => {});
+      try { (await connected).close(); } catch {}
+    },
+  };
+}

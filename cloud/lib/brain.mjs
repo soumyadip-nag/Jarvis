@@ -27,7 +27,7 @@ const ANSWER_NOW = "Give your final answer to the user now, in one to three shor
  * The conversation with tool calls turned into plain text. Groq rejects a request with no tools if the
  * model tries to call one, and it will try if it can see earlier tool calls.
  */
-async function finalAnswer(messages, temperature) {
+async function finalAnswer(messages, temperature, onText) {
   const results = messages.filter((m) => m.role === "tool").map((m) => m.content);
   const plain = [
     ...messages
@@ -36,7 +36,7 @@ async function finalAnswer(messages, temperature) {
       .map((m, i) => (i === 0 ? { ...m, content: m.content.replace(/Devices and actions:[\s\S]*?(?=Current date)/, "") } : m)),
     { role: "system", content: `${results.length ? `What your tools returned:\n${results.join("\n\n")}\n\n` : ""}${ANSWER_NOW}` },
   ];
-  const ask = () => chat({ messages: plain, temperature });
+  const ask = () => chat({ messages: plain, temperature, onText });
   const msg = await ask().catch((e) => {
     if (e.message.includes("tool_use_failed")) return ask(); // it tried to call a tool anyway; usually fine the second time
     throw e;
@@ -359,7 +359,34 @@ function localTime(tz) {
  * Handle one user message from a device.
  * Returns { user, reply, actions } and schedules memory extraction via `defer`.
  */
-export async function respond({ text, device, tz, defer = (p) => p }) {
+/**
+ * Passes on each finished sentence of a reply while it's still being written, with the same checks cleanReply
+ * makes on the whole reply: nothing without words, and nothing from reasoning onwards.
+ */
+function sentenceStream(onSentence) {
+  let buffer = "";
+  let stopped = !onSentence;
+  const pass = (sentence) => {
+    sentence = sentence.replace(/[\u200b-\u200f\u2060\ufeff]/g, "").trim();
+    if (stopped || !sentence) return;
+    if (REASONING.test(sentence)) { stopped = true; return; }
+    if (/\p{L}{2}/u.test(sentence)) onSentence(sentence);
+  };
+  return {
+    push: onSentence && ((text) => {
+      buffer += text;
+      let match;
+      while ((match = buffer.match(/^([\s\S]*?[.!?\u2026])(\s+)/))) {
+        pass(match[1]);
+        buffer = buffer.slice(match[0].length);
+      }
+    }),
+    flush: () => { pass(buffer); buffer = ""; },
+  };
+}
+
+export async function respond({ text, device, tz, defer = (p) => p, onSentence }) {
+  const spoken = sentenceStream(onSentence);
   const now = localTime(tz);
   const history = (await recentMessages()).slice(-RECENT_MESSAGES);
   const userMsg = await addMessage({ role: "user", content: text, device });
@@ -384,10 +411,10 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
       // One search per question, then it has to answer: each search uses up the daily allowance.
       const answerOnly = ctx.searched || step === MAX_STEPS - 1;
       if (answerOnly) {
-        reply = await finalAnswer(messages, 0.3);
+        reply = await finalAnswer(messages, 0.3, spoken.push);
         break;
       }
-      const msg = await chat({ messages, tools: tools() });
+      const msg = await chat({ messages, tools: tools(), onText: spoken.push });
       if (!msg.tool_calls?.length) {
         reply = cleanReply(msg.content);
         break;
@@ -407,8 +434,9 @@ export async function respond({ text, device, tz, defer = (p) => p }) {
       }
     }
     if (!reply && !ctx.actions.length) {
-      reply = await finalAnswer(messages, 0.2);
+      reply = await finalAnswer(messages, 0.2, spoken.push);
     }
+    spoken.flush();
   } catch (e) {
     console.error("chat failed:", e);
     if (e instanceof ShareUsedError) {

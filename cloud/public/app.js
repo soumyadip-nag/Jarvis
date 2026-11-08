@@ -451,6 +451,112 @@
     }
   }
 
+  /**
+   * Speaks a reply while it's still arriving: each sentence's voice is requested as soon as the sentence exists,
+   * and they play in order. Long replies are cut short the same way as spokenParts does.
+   */
+  function voiceQueue() {
+    const turn = ++voiceTurn;
+    const c = audio();
+    const ready = Promise.race([c.resume(), new Promise((resolve) => setTimeout(resolve, 1000))]);
+    let chain = ready;
+    let count = 0;
+    const held = [];
+    const unspoken = [];
+    const arriving = []; // audio sent along with the reply, by sentence number
+    const arrival = (index) => (arriving[index] ||= (() => { let resolve; const p = new Promise((r) => (resolve = r)); p.resolve = resolve; return p; })());
+    const play = (sentence, index) => {
+      const voice = ready.then(async () => {
+        if (c.state !== "running") throw new Error("Audio is blocked until the screen is tapped");
+        const mp3 = index === undefined ? null : await arrival(index);
+        if (!mp3) return fetchVoice(sentence);
+        const bytes = Uint8Array.from(atob(mp3), (ch) => ch.charCodeAt(0));
+        return c.decodeAudioData(bytes.buffer);
+      });
+      voice.catch(() => {});
+      chain = chain.then(async () => {
+        if (turn !== voiceTurn) return;
+        if (unspoken.length) return void unspoken.push(sentence); // the voice failed earlier: the phone's own voice finishes
+        try {
+          const decoded = await voice;
+          if (turn !== voiceTurn) return;
+          setState("speaking", "Speaking");
+          await playVoice(decoded);
+        } catch {
+          unspoken.push(sentence);
+        }
+      });
+    };
+    return {
+      add(sentence, index) {
+        count++;
+        if (count <= 2) play(sentence, index);
+        else held.push([sentence, index]); // wait to see whether the reply is long enough to send to the screen instead
+      },
+      /** Audio for a sentence, sent with the reply; null means it has to be fetched. */
+      audio(index, mp3) {
+        arrival(index).resolve(mp3);
+      },
+      /** The reply's stream has ended: any sentence still without audio has to be fetched. */
+      allArrived() {
+        for (let i = 0; i < count; i++) arrival(i).resolve(null);
+      },
+      async finish(text) {
+        const long = count > 4 && text.length >= 250;
+        if (long) play("The rest is on your screen.");
+        else held.forEach(([sentence, index]) => play(sentence, index));
+        await chain;
+        if (turn === voiceTurn && unspoken.length) await speakSystem(unspoken.join(" "));
+        if (turn === voiceTurn && state === "speaking") setState("idle", "Awaiting your command");
+      },
+    };
+  }
+
+  /** Sends a message and passes each sentence of the reply on as it's written. Returns what api("chat") would. */
+  async function chatStreaming(text, onSentence, voice) {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream", Authorization: "Bearer " + token },
+      body: JSON.stringify({ text, tz, voice: !!voice }),
+    });
+    if (!(res.headers.get("content-type") || "").includes("event-stream")) {
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) { logout(); throw new Error("Session expired, please sign in again."); }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    }
+    // The reply is returned at "done", but reading carries on: audio for the last sentences can come after it.
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    return new Promise((resolve, reject) => {
+      let buffer = "";
+      let finished = false;
+      (async () => {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let end;
+          while ((end = buffer.indexOf("\n\n")) !== -1) {
+            const block = buffer.slice(0, end);
+            buffer = buffer.slice(end + 2);
+            const name = block.match(/^event: (.*)$/m)?.[1];
+            const data = JSON.parse(block.match(/^data: (.*)$/m)?.[1] || "{}");
+            if (name === "sentence") onSentence(data.text, data.index);
+            else if (name === "audio") voice?.audio(data.index, data.audio);
+            else if (name === "done") { finished = true; resolve(data); }
+            else if (name === "error") { finished = true; reject(new Error(data.error)); }
+          }
+        }
+      })()
+        .catch((e) => { if (!finished) reject(e); })
+        .finally(() => {
+          if (!finished) reject(new Error("The connection closed before the reply finished."));
+          voice?.allArrived();
+        });
+    });
+  }
+
   async function speak(text) {
     if (!settings.autoSpeak) return;
     if (settings.voice === "jarvis") {
@@ -640,7 +746,17 @@
     const local = renderMessage({ role: "user", content: text, device: DEVICE, ts: Date.now() });
     setState("thinking", "Thinking");
     try {
-      const data = await api("chat", { method: "POST", body: { text, tz } });
+      const voice = settings.autoSpeak && settings.voice === "jarvis" ? voiceQueue() : null;
+      const streamed = [];
+      let live = null;
+      const data = await chatStreaming(text, (sentence, index) => {
+        streamed.push(sentence);
+        live ||= renderMessage({ role: "assistant", content: "", ts: Date.now() });
+        live.querySelector(".body").textContent = streamed.join(" ");
+        scrollDown();
+        voice?.add(sentence, index);
+      }, voice);
+      live?.remove(); // replaced by the finished reply below, with its actions
       seen.add(data.user.id);
       lastTs = Math.max(lastTs, data.user.ts);
       busy = false;
@@ -654,7 +770,7 @@
       if (outcome) {
         data.reply.content = outcome.contact && Native && settings.confirmCalls ? `Tap to call ${outcome.contact.name}.` : outcome.say;
       }
-      renderMessage(data.reply, { typewriter: true });
+      renderMessage(data.reply, { typewriter: !streamed.length });
       if (outcome?.contact) {
         if (Native && !settings.confirmCalls) {
           await announceAndCall(outcome.say, () => placeCall(outcome.contact));
@@ -670,7 +786,8 @@
       }
       const toOpen = data.actions.filter((a) => a.type === "open_url" && !a.queued);
       if (settings.autoOpen && toOpen.length) openUrl(toOpen[0].url);
-      await speak(data.reply.content);
+      if (voice && streamed.length) await voice.finish(data.reply.content);
+      else await speak(data.reply.content);
     } catch (e) {
       busy = false;
       local?.classList.add("failed");

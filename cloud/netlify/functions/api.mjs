@@ -2,6 +2,8 @@
 //
 //   POST   /api/login              {passcode, device: "phone"|"laptop"} -> {token}
 //   POST   /api/chat               {text, tz}                -> {user, reply, actions}
+//                                   With "Accept: text/event-stream": "sentence" events as the reply is written, then "done".
+//                                   With {voice: true} too, "audio" events carry each sentence's MP3 (or null: fetch it)
 //   GET    /api/sync?since=<ts>    -> {messages, commands, devices, user}  (one cheap call for polling)
 //   POST   /api/commands/<id>/done
 //   POST   /api/calls              {name, number, goal}: asks the laptop to make a call for the user
@@ -20,7 +22,9 @@ import { addMessage, messagesSince, clearRecent } from "../../lib/messages.mjs";
 import { listMemories, addMemories, deleteMemory } from "../../lib/memory.mjs";
 import { getImage } from "../../lib/images.mjs";
 import { transcribe } from "../../lib/llm.mjs";
-import { synthesize, MAX_SPEECH_CHARS } from "../../lib/voice.mjs";
+import { synthesize, voiceSession, MAX_SPEECH_CHARS } from "../../lib/voice.mjs";
+
+const VOICED_SENTENCES = 4;
 import { enqueue, touch, pending, done, status } from "../../lib/devices.mjs";
 
 const json = (data, status = 200) =>
@@ -38,9 +42,40 @@ async function signedIn(req, context, { url, parts, route, device, user }) {
   await touch(device);
 
   if (route === "POST /chat") {
-    const { text, tz } = await body(req);
+    const { text, tz, voice: wantsVoice } = await body(req);
     if (!text || typeof text !== "string" || text.length > 4000) return json({ error: "Invalid text" }, 400);
     const defer = (promise) => (context?.waitUntil ? context.waitUntil(promise) : promise);
+    if ((req.headers.get("accept") || "").includes("text/event-stream")) {
+      // Sentences are sent as they're written, so the phone can show and speak them straight away.
+      // With voice, each sentence's audio follows it, made over one connection opened while the AI is thinking.
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          const event = (name, data) => controller.enqueue(encoder.encode(`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`));
+          const voice = wantsVoice ? voiceSession() : null;
+          const voiced = [];
+          let count = 0;
+          const onSentence = (sentence) => {
+            const index = count++;
+            event("sentence", { index, text: sentence });
+            // Only the first few: the phone shows long replies on screen rather than reading them all out.
+            if (voice && index < VOICED_SENTENCES) {
+              voiced.push(voice.say(sentence).then((mp3) => event("audio", { index, audio: mp3 ? mp3.toString("base64") : null })));
+            }
+          };
+          try {
+            event("done", await respond({ text: text.trim(), device, tz, defer, onSentence }));
+            await Promise.all(voiced);
+          } catch (e) {
+            console.error("chat failed:", e);
+            event("error", { error: "Something went wrong on my side." });
+          }
+          await voice?.close();
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+    }
     return json(await respond({ text: text.trim(), device, tz, defer }));
   }
 

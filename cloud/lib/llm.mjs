@@ -70,8 +70,9 @@ async function recordUsage({ model, backup }, usage) {
 
 const backupReady = () => !!(process.env.CLOUDFLARE_ACCOUNT_ID && process.env.CLOUDFLARE_API_TOKEN);
 
-function send({ url, key, model }, { messages, tools, json, maxTokens, temperature }) {
+function send({ url, key, model }, { messages, tools, json, maxTokens, temperature, stream }, signal) {
   const body = { model, messages, max_tokens: maxTokens, temperature };
+  if (stream) body.stream = true;
   if (tools?.length) { body.tools = tools; body.tool_choice = "auto"; }
   if (json) body.response_format = { type: "json_object" };
   if (model.includes("gpt-oss")) body.reasoning_effort = "low"; // the hidden reasoning is most of what a short reply costs
@@ -79,8 +80,61 @@ function send({ url, key, model }, { messages, tools, json, maxTokens, temperatu
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    signal,
   });
+}
+
+/**
+ * Reads a streamed reply, passing its text on as it arrives, and returns the whole message as a normal reply would.
+ * Text is held back from the first "<" until it's clear it isn't the start of leaked reasoning.
+ */
+async function readStream(res, onText, arrived) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let sent = 0;
+  let usage = null;
+  const calls = [];
+  const release = (all) => {
+    const hold = content.indexOf("<", sent);
+    const upTo = all ? content.length : hold === -1 ? content.length : hold;
+    if (upTo > sent) {
+      onText(content.slice(sent, upTo));
+      sent = upTo;
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    arrived();
+    buffer += decoder.decode(value, { stream: true });
+    let end;
+    while ((end = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, end).trim();
+      buffer = buffer.slice(end + 1);
+      if (!line.startsWith("data:") || line === "data: [DONE]") continue;
+      let chunk;
+      try { chunk = JSON.parse(line.slice(5)); } catch { continue; }
+      usage = chunk.usage || chunk.x_groq?.usage || usage;
+      const delta = chunk.choices?.[0]?.delta || {};
+      for (const t of delta.tool_calls || []) {
+        const call = (calls[t.index ?? 0] ||= { id: "", type: "function", function: { name: "", arguments: "" } });
+        if (t.id) call.id = t.id;
+        if (t.function?.name) call.function.name += t.function.name;
+        if (t.function?.arguments) call.function.arguments += t.function.arguments;
+      }
+      if (delta.content) {
+        content += delta.content;
+        if (LEAKED_REASONING.test(content)) {
+          throw Object.assign(new Error("leaked its hidden reasoning into the reply"), { partial: content.slice(0, sent) });
+        }
+        if (!calls.length) release(false);
+      }
+    }
+  }
+  if (!calls.length) release(true);
+  return { message: { role: "assistant", content, ...(calls.length ? { tool_calls: calls } : {}) }, usage };
 }
 
 /** A request problem would fail everywhere; anything else (limits, outages, a bad reply from the model) may not. */
@@ -90,7 +144,7 @@ const worthTryingNext = (status, detail) => status >= 500 || status === 429 || s
  * The model's message, from the first provider that manages one: the requested Groq model, the smaller one, then
  * Cloudflare. Pass `backup: false` for work that can be skipped, so that it doesn't use up the backup's allowance.
  */
-export async function chat({ messages, tools, model = MODEL(), json = false, maxTokens = 1024, temperature = 0.6, backup = true }) {
+export async function chat({ messages, tools, model = MODEL(), json = false, maxTokens = 1024, temperature = 0.6, backup = true, onText }) {
   if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY is not set on the server.");
   const groq = (name) => ({ url: GROQ_URL, key: process.env.GROQ_API_KEY, model: name, label: `Groq ${name}` });
   const providers = [groq(model), ...(model === FAST_MODEL() ? [] : [groq(FAST_MODEL())])];
@@ -114,13 +168,39 @@ export async function chat({ messages, tools, model = MODEL(), json = false, max
   for (const provider of providers) {
     const problem = await shareProblem(provider);
     if (problem) { shareUsed ||= problem; continue; }
+    // A streamed reply has the same time limit to start, and longer to finish.
+    const controller = new AbortController();
+    const startTimer = setTimeout(() => controller.abort(new Error("timed out")), AI_TIMEOUT_MS);
+    const endTimer = setTimeout(() => controller.abort(new Error("timed out")), AI_TIMEOUT_MS * 3);
+    const settled = () => { clearTimeout(startTimer); clearTimeout(endTimer); };
     let res;
     try {
-      res = await send(provider, { messages, tools, json, maxTokens, temperature });
+      res = await send(provider, { messages, tools, json, maxTokens, temperature, stream: !!onText }, controller.signal);
     } catch (e) { // no connection, or too slow
+      settled();
       failed(provider, e);
       continue;
     }
+    if (onText && res.ok) {
+      let streamed = "";
+      try {
+        const { message, usage } = await readStream(res, (text) => { streamed += text; onText(text); }, () => clearTimeout(startTimer));
+        settled();
+        if (!message.content?.trim() && !message.tool_calls?.length) {
+          failed(provider, new Error(`${provider.label} returned an empty reply`));
+          continue;
+        }
+        await recordUsage(provider, usage);
+        return message;
+      } catch (e) {
+        settled();
+        // Once the user has some of the reply, another model can't carry it on, so keep what they have.
+        if (streamed) return { role: "assistant", content: streamed };
+        failed(provider, e);
+        continue;
+      }
+    }
+    settled();
     if (!res.ok) {
       const detail = await res.text();
       const error = Object.assign(new Error(`${provider.label} ${res.status}: ${detail.slice(0, 300)}`), { status: res.status });
