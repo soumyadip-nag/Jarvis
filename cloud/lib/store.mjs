@@ -1,4 +1,5 @@
-// Storage: Netlify Blobs in production, a JSON-file store for local tests (JARVIS_LOCAL_STORE=dir).
+// Storage: Cloudflare D1 when running as a Worker (see worker.mjs), Netlify Blobs on Netlify, and a JSON-file
+// store for local tests (JARVIS_LOCAL_STORE=dir). All three keep JSON values under string keys.
 import { getStore } from "@netlify/blobs";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,6 +21,54 @@ function fileStore(dir) {
   };
 }
 
+let d1 = null;
+const tableReady = new WeakMap(); // for each database: the table has been created
+
+/** The Worker hands over its D1 database binding with every request. */
+export function useD1(database) {
+  d1 = database;
+}
+
+/**
+ * Keys and JSON values in one D1 table. A listing also returns the values, and keeps them for the get() calls that
+ * usually follow, because D1 allows a limited number of queries for each request.
+ */
+function d1Store(db) {
+  if (!tableReady.has(db)) tableReady.set(db, db.prepare("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run());
+  const listed = new Map();
+  const ready = () => tableReady.get(db);
+  return {
+    async get(key) {
+      if (listed.has(key)) {
+        const value = listed.get(key);
+        listed.delete(key);
+        return value;
+      }
+      await ready();
+      const row = await db.prepare("SELECT value FROM kv WHERE key = ?1").bind(key).first();
+      return row ? JSON.parse(row.value) : null;
+    },
+    async setJSON(key, value) {
+      await ready();
+      listed.delete(key);
+      await db.prepare("INSERT INTO kv (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(key, JSON.stringify(value)).run();
+    },
+    async delete(key) {
+      await ready();
+      listed.delete(key);
+      await db.prepare("DELETE FROM kv WHERE key = ?1").bind(key).run();
+    },
+    async list({ prefix = "" } = {}) {
+      await ready();
+      const { results } = await db.prepare("SELECT key, value FROM kv WHERE key >= ?1 AND key < ?2 ORDER BY key")
+        .bind(prefix, prefix + "\uffff").all();
+      for (const row of results) listed.set(row.key, JSON.parse(row.value));
+      return { blobs: results.map((row) => ({ key: row.key })) };
+    },
+  };
+}
+
 let localStore;
 /**
  * The whole store, for what isn't anyone's own data, such as login attempts.
@@ -27,6 +76,7 @@ let localStore;
  * many requests, so keeping one would fail everything with "Token expired" once it ran out.
  */
 export function globalStore() {
+  if (d1 || globalThis.__JARVIS_TEST_D1) return d1Store(d1 || globalThis.__JARVIS_TEST_D1(process.env.JARVIS_LOCAL_STORE));
   if (process.env.JARVIS_LOCAL_STORE) {
     localStore ||= fileStore(process.env.JARVIS_LOCAL_STORE);
     return localStore;

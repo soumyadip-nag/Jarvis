@@ -821,8 +821,10 @@ class SyncWorker(QObject):
                 print(f"Sync: {e}")
             except Exception as e:
                 print(f"Sync error: {e}")
+            # Each check costs the server a little (Netlify's free plan counts every request), so when nothing has
+            # happened for two minutes, check once a minute.
             active = time.time() - self.last_activity < 120
-            time.sleep(4 if active else 12)
+            time.sleep(5 if active else 60)
 
     @staticmethod
     def _label(m):

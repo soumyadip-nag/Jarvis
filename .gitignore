@@ -23,3 +23,7 @@ cloud/.netlify/
 # Android app
 mobile/node_modules/
 mobile/ci-out/
+
+# Cloudflare: local secrets and local state
+cloud/.dev.vars
+cloud/.wrangler/

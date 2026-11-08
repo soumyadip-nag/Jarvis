@@ -3,10 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:d1": "node --import ./test/use-d1.mjs --test test/*.test.mjs"
   },
   "dependencies": {
     "@netlify/blobs": "^8.1.0",
     "msedge-tts": "^2.1.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.158.0"
   }
 }
